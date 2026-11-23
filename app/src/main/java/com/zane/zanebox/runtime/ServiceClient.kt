@@ -1,0 +1,324 @@
+package com.zane.zanebox.runtime
+
+import android.content.ComponentName
+import android.content.Context
+import android.content.Intent
+import android.content.ServiceConnection
+import android.os.IBinder
+import androidx.core.content.ContextCompat
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.channels.Channel
+import com.zane.zanebox.data.ZaneStore
+import com.zane.zanebox.data.AppData
+import org.json.JSONArray
+import org.json.JSONObject
+
+data class RuntimeSnapshot(val state:Int=0,val started:Long=0,val generation:Long=0,val txRate:Long=0,val rxRate:Long=0,val txTotal:Long=0,val rxTotal:Long=0,val error:String="",val mixedHost:String="127.0.0.1",val mixedPort:Int=0,val pendingManual:Boolean=false) {
+    val connectionState:RuntimeState get()=RuntimeState.fromCode(state)
+    fun json():String = JSONObject().put("state",state).put("started",started).put("generation",generation).put("txRate",txRate).put("rxRate",rxRate).put("txTotal",txTotal).put("rxTotal",rxTotal).put("error",error).put("mixedHost",mixedHost).put("mixedPort",mixedPort).put("pendingManual",pendingManual).toString()
+    companion object { fun parse(s:String):RuntimeSnapshot { val o=JSONObject(s);return RuntimeSnapshot(o.optInt("state"),o.optLong("started"),o.optLong("generation"),o.optLong("txRate"),o.optLong("rxRate"),o.optLong("txTotal"),o.optLong("rxTotal"),o.optString("error"),o.optString("mixedHost","127.0.0.1"),o.optInt("mixedPort"),o.optBoolean("pendingManual")) } }
+}
+class ServiceClient(context:Context,private val targetClass:Class<*>?=null) {
+    private val context=context.applicationContext
+    private val scope=CoroutineScope(SupervisorJob()+Dispatchers.IO)
+    private val commands=Channel<suspend ()->Unit>(Channel.UNLIMITED)
+    init { scope.launch { for(task in commands) { try { task() } catch(e:Exception) { event.emit(e.message ?: "服务操作失败") } } } }
+    private fun submit(task:suspend ()->Unit) { commands.trySend(task) }
+    private val state=MutableStateFlow(RuntimeSnapshot())
+    val snapshot:StateFlow<RuntimeSnapshot> = state
+    val autoNodeId=MutableStateFlow(0L)
+    private val chainSelectionState=MutableStateFlow("{}");val chainSelections:StateFlow<String> = chainSelectionState
+    private val switchGate=SwitchTestGate()
+    private val event=MutableSharedFlow<String>(extraBufferCapacity=32)
+    val events:SharedFlow<String> = event
+    private val tests=MutableStateFlow<Map<Long,Int>>(emptyMap())
+    val testResults:StateFlow<Map<Long,Int>> = tests
+    private val testingState=MutableStateFlow<Set<Long>>(emptySet())
+    val testingNodes:StateFlow<Set<Long>> = testingState
+    private val progress=MutableStateFlow(LatencyTestProgress())
+    val testProgress:StateFlow<LatencyTestProgress> = progress
+    private val testLock=Any()
+    private val testFence=LatencyRequestFence()
+    private val assetState=MutableStateFlow(0L)
+    val assetRevision:StateFlow<Long> = assetState
+    private val logState=MutableStateFlow<List<String>>(emptyList());val logs:StateFlow<List<String>> = logState
+    private val ipState=MutableStateFlow("");val exitIp:StateFlow<String> = ipState
+    private val trafficState=MutableStateFlow("{}");val traffic:StateFlow<String> = trafficState
+    private val connectionState=MutableStateFlow("{}");val connections:StateFlow<String> = connectionState
+    private val speedState=MutableStateFlow("");val speedResult:StateFlow<String> = speedState
+    private val validationState=MutableStateFlow<Map<String,String>>(emptyMap());val validationResults:StateFlow<Map<String,String>> = validationState
+    private val subscriptionResults=MutableStateFlow<Map<String,String>>(emptyMap())
+    private val subscriptionMeasurements=MutableStateFlow<Set<String>>(emptySet())
+    @Volatile private var subscriptionRequest=""
+    private val panelState=MutableStateFlow("");val panelUrl:StateFlow<String> = panelState
+    private val stunState=MutableStateFlow("{}");val stunResult:StateFlow<String> = stunState
+    @Volatile private var remote:IRuntime?=null
+    private var bound=false
+    private var boundClass:Class<*>?=null
+    private fun serviceClass():Class<*> = targetClass ?: RuntimeServiceTarget.serviceClass(context)
+    private var wasConnected=false
+    private val visibilityToken=java.util.UUID.randomUUID().toString()
+    @Volatile private var uiVisible=false
+    fun setUiVisible(visible:Boolean) {uiVisible=visible;submit {remote?.command("uiVisible","$visibilityToken|$visible")}}
+    private val bindingLock=Any()
+    private val bindingEpoch=java.util.concurrent.atomic.AtomicLong()
+    private val bindingChanges=MutableStateFlow(0L)
+    private var foregroundAwaiter:Pair<String,CompletableDeferred<Unit>>?=null
+    private var bindingAwaiter:CompletableDeferred<Unit>?=null
+    private fun invalidateBinding():Long {
+        foregroundAwaiter?.second?.completeExceptionally(IllegalStateException("后台服务已断开，请重试"))
+        bindingAwaiter?.completeExceptionally(IllegalStateException("后台服务已断开，请重试"));bindingAwaiter=null
+        return bindingEpoch.incrementAndGet().also {bindingChanges.value=it}
+    }
+    @Volatile private var callback:IRuntimeCallback?=null
+    private fun callback(epoch:Long,initialTesting:CompletableDeferred<Unit>)=object:IRuntimeCallback.Stub() {
+        override fun onSnapshot(json:String) {synchronized(bindingLock) {if(epoch!=bindingEpoch.get())return;runCatching {
+            val next=RuntimeSnapshot.parse(json);state.value=next
+            if(uiVisible)remote?.command("uiVisible","$visibilityToken|true")
+            if(next.state==2 && !wasConnected && targetClass==null && com.zane.zanebox.ZaneApplication.mainProcess)com.zane.zanebox.subscription.SubscriptionScheduler.onConnectionChanged(context,true)
+            wasConnected=next.state==2
+        } } }
+        override fun onEvent(kind:String,payload:String) {synchronized(bindingLock) {if(epoch!=bindingEpoch.get())return;when(kind) {
+            "foregroundReady" -> foregroundAwaiter?.takeIf {it.first==payload}?.second?.complete(Unit)
+            "autoSelection" -> autoNodeId.value=payload.toLongOrNull() ?: 0L
+            "chainSelections" -> chainSelectionState.value=payload
+            "selected" -> runCatching { val o=JSONObject(payload);if(switchGate.accept(o.optString("token")) && o.optBoolean("changed") && o.optBoolean("autoTest",true))testSwitchedNode(o.getLong("id")) }
+            "test" -> synchronized(testLock) {
+                val o=JSONObject(payload)
+                if(testFence.acceptResult(o.getString("epoch"),o.getLong("batchId"),o.getString("request"))) {
+                    val id=o.getLong("id");tests.value=tests.value+(id to o.getInt("ping"));testingState.value=testingState.value-id
+                }
+            }
+            "testing" -> synchronized(testLock) {
+                val o=JSONObject(payload);val batch=o.getLong("batchId");val request=o.getString("request")
+                if(testFence.acceptState(o.getString("epoch"),batch,request,o.optBoolean("begin"))) {
+                    if(batch!=progress.value.batchId)tests.value=emptyMap()
+                    val nodes=o.getJSONArray("nodes");testingState.value=(0 until nodes.length()).map{nodes.getLong(it)}.toSet()
+                    progress.value=LatencyTestProgress(batch,o.getInt("total"),o.getInt("completed"),o.getBoolean("running"))
+                }
+                initialTesting.complete(Unit)
+            }
+            "assetInstalled" -> { assetState.value++;event.tryEmit(payload) }
+            "logs" -> { val a=JSONArray(payload);logState.value=(0 until a.length()).map { a.getString(it) } }
+            "ip" -> ipState.value=payload
+            "traffic" -> trafficState.value=payload
+            "connections" -> connectionState.value=payload
+            "speed" -> speedState.value=payload
+            "validation" -> { val o=JSONObject(payload);validationState.update { it+(o.getString("name") to o.optString("error")) } }
+            "subscriptionApplied" -> {val o=JSONObject(payload);val request=o.getString("request");if(request==subscriptionRequest)subscriptionResults.update {it+(request to o.optString("error"))}}
+            "subscriptionMeasured" -> {val request=JSONObject(payload).getString("request");if(request==subscriptionRequest)subscriptionMeasurements.update {it+request}}
+            "panel" -> panelState.value=payload
+            "stun" -> stunState.value=payload
+            "restored" -> { event.tryEmit("备份已恢复");val o=JSONObject(payload);if(o.optBoolean("modeChanged"))submit { ensureMode();if(o.optBoolean("running"))startRemote() } }
+            else -> event.tryEmit(payload)
+        } } }
+    }
+    private val connection=object:ServiceConnection {
+        override fun onServiceConnected(name:ComponentName,service:IBinder) {
+            val initialTesting=CompletableDeferred<Unit>()
+            val epoch=synchronized(bindingLock) {synchronized(testLock) {testFence.newConnection()};invalidateBinding().also {bindingAwaiter=initialTesting}}
+            val nextCallback=callback(epoch,initialTesting)
+            scope.launch {
+                val runtime=IRuntime.Stub.asInterface(service)
+                try {
+                    runtime.registerCallback(nextCallback)
+                    // Callback IPC is oneway; a synchronous getSnapshot does not drain its initial testing event.
+                    withTimeout(5000) {initialTesting.await()}
+                    val connected=synchronized(bindingLock) {
+                        if(epoch!=bindingEpoch.get())false else {callback=nextCallback;remote=runtime;bindingAwaiter=null;true}
+                    }
+                    if(!connected) {runCatching {runtime.unregisterCallback(nextCallback)};return@launch}
+                    runtime.command("uiVisible","$visibilityToken|$uiVisible");runtime.command("refreshNotification","")
+                } catch(e:Exception) {
+                    runCatching {runtime.unregisterCallback(nextCallback)}
+                    if(synchronized(bindingLock) {if(epoch==bindingEpoch.get()) {invalidateBinding();remote=null;true} else false})event.emit("服务连接失败")
+                }
+            }
+        }
+        override fun onServiceDisconnected(name:ComponentName) {synchronized(bindingLock) {invalidateBinding();remote=null;callback=null;clearPendingTests();switchGate.clear();state.value=RuntimeSnapshot(error="后台服务已断开")}}
+        // A dead binding never reconnects by itself (e.g. after the APK is updated); rebind so later commands work.
+        override fun onBindingDied(name:ComponentName) {synchronized(bindingLock) {invalidateBinding();remote=null;callback=null;clearPendingTests();switchGate.clear()};submit {if(bound) {runCatching {context.unbindService(this)};bound=false};connect()}}
+    }
+    private fun clearPendingTests() {
+        synchronized(testLock) {
+            tests.value=emptyMap();testingState.value=emptySet();progress.value=LatencyTestProgress()
+            testFence.resetBinding()
+        }
+        if(speedState.value.isNotBlank() && !runCatching { JSONObject(speedState.value).optBoolean("done") }.getOrDefault(true))speedState.value=JSONObject().put("stage","error").put("done",true).put("error","后台服务已断开，请重新测速").toString()
+    }
+    private fun bind(target:Class<*>) { if(!bound) {boundClass=target;bound=context.bindService(Intent(context,boundClass),connection,Context.BIND_AUTO_CREATE)} }
+    private fun connectNow() {bind(targetClass ?: runningServiceClass(context) ?: serviceClass())}
+    fun connect() {submit {connectNow()}}
+    private suspend fun ensureBinding() {connectNow();withTimeout(20000){while(remote==null)delay(50)}}
+    private suspend fun ensureMode() {
+        val next=serviceClass()
+        if(bound && boundClass!=next) {
+            remote?.command("stop","")
+            withTimeout(30000) { while(state.value.state in listOf(1,2,3))delay(50) }
+            runCatching {callback?.let {remote?.unregisterCallback(it)}}
+            synchronized(bindingLock) {invalidateBinding();remote=null;callback=null;clearPendingTests()}
+            context.unbindService(connection);bound=false
+            state.value=RuntimeSnapshot()
+        }
+        bind(next)
+        withTimeout(20000) { while(remote==null)delay(50) }
+    }
+    private fun connectedRuntime():IRuntime = remote ?: error("后台服务已断开，请重试")
+    suspend fun readSnapshot():RuntimeSnapshot {ensureBinding();val runtime=connectedRuntime();return RuntimeSnapshot.parse(runtime.getSnapshot())}
+    suspend fun applySubscription(groupId:Long,onApplied:()->Unit={}) = subscriptionApply.withLock {
+        val request=java.util.UUID.randomUUID().toString()
+        try {
+            ensureBinding()
+            val runtime=connectedRuntime();val epoch=bindingEpoch.get()
+            check(remote===runtime) {"后台服务已断开，请重试"}
+            subscriptionRequest=request
+            runtime.command("subscriptionUpdated",JSONObject().put("groupId",groupId).put("request",request).toString())
+            // ponytail: bounded by ordinary WorkManager's execution window; use foreground work for very large subscriptions.
+            val error=withTimeout(8*60*1000L) {
+                combine(subscriptionResults,bindingChanges) {results,connection ->
+                    results[request] ?: if(connection!=epoch)"后台服务已断开，请重试" else null
+                }.first {it!=null}.orEmpty()
+            }
+            check(error.isBlank()) {error}
+            onApplied()
+            // Keep the Worker binding alive while the runtime finishes its optional measurements.
+            val measured=withTimeoutOrNull(8*60*1000L) {
+                combine(subscriptionMeasurements,bindingChanges) {done,connection ->
+                    when {request in done->true;connection!=epoch->false;else->null}
+                }.first {it!=null}
+            }
+            if(measured!=true)event.emit("订阅已应用，延迟测试未完成")
+        } finally {subscriptionRequest="";subscriptionResults.update {it-request};subscriptionMeasurements.update {it-request}}
+    }
+    private fun command(action:String,payload:String="") {submit {ensureBinding();val runtime=connectedRuntime();runtime.command(action,payload)}}
+    private suspend fun startRemote() {
+        val runtime=connectedRuntime();val request=java.util.UUID.randomUUID().toString();val entered=CompletableDeferred<Unit>()
+        synchronized(bindingLock) {check(remote===runtime) {"后台服务已断开，请重试"};foregroundAwaiter=request to entered}
+        try {
+            ContextCompat.startForegroundService(context,Intent(context,boundClass).setAction("foreground").putExtra("request",request))
+            // Keep START/STOP queue order even if Android delivers the FGS intent after a Binder command.
+            withTimeout(10000) {entered.await()}
+            check(remote===runtime) {"后台服务已断开，请重试"};runtime.command("start","")
+        } finally {synchronized(bindingLock) {if(foregroundAwaiter?.first==request)foregroundAwaiter=null}}
+    }
+    fun start() { submit { ensureMode();startRemote() } }
+    fun stop()=command("stop")
+    fun reload() { submit { val changed=boundClass!=serviceClass();val running=state.value.state==2;ensureMode();if(changed && running)startRemote() else remote?.command("reload","") } }
+    // A pending service-mode edit must not silently switch the bound service.
+    fun autoReload() { submit {remote?.command("autoReload","")} }
+    // Cosmetic refresh uses the existing binding and never starts or changes a service.
+    fun refreshNotification() { scope.launch { runCatching { remote?.command("refreshNotification","") }.onFailure { event.emit("通知图标刷新失败") } } }
+    fun refreshSettings() { submit {remote?.command("liveSettings","")} }
+    /** The single entry for user node switches. The token is issued only once the command is about to be sent, and is released by the runtime's receipt or by a failed send. */
+    fun selectNode(id:Long) { submit {
+        ensureBinding()
+        val token=switchGate.issue()
+        try {val runtime=connectedRuntime();runtime.command("select",selectPayload(id,token))} catch(e:Exception) { switchGate.accept(token);throw e }
+    } }
+    private fun testSwitchedNode(id:Long) = beginTests("test") { request -> JSONObject().put("request",request).put("ids",JSONArray().put(id)).put("quiet",true) }
+    fun selectAuto()=command("selectAuto")
+    fun testNodes(ids:List<Long>) = beginTests("test") { request -> JSONObject().put("request",request).put("ids",JSONArray(ids)) }
+    /** Tests every candidate of a routing target and applies the lowest successful one; [serviceKey] binds the result to that policy. */
+    fun testTarget(target:String,serviceKey:String="") = beginTests("targetTest") { request -> JSONObject().put("request",request).put("target",target).put("serviceKey",serviceKey) }
+    private fun beginTests(action:String,payload:(String)->JSONObject) = synchronized(testLock) {
+        tests.value=emptyMap();testingState.value=emptySet();progress.value=LatencyTestProgress()
+        val request=testFence.issue()
+        // Issue and enqueue share the cancellation lock, preserving order across UI and Binder callbacks.
+        submit {
+            try {
+                if(!synchronized(testLock) {testFence.canSend(request)})return@submit
+                ensureBinding();val runtime=connectedRuntime()
+                // It may have been cancelled while waiting for a binding, before it ever had a server batch.
+                if(synchronized(testLock) {testFence.canSend(request)})runtime.command(action,payload(request).toString())
+            } catch(e:Exception) {
+                synchronized(testLock) {
+                    if(testFence.isCurrent(request)) {
+                        testFence.cancel();testingState.value=emptySet();progress.value=progress.value.copy(running=false)
+                    }
+                }
+                throw e
+            }
+        }
+    }
+    fun cancelTests() {
+        synchronized(testLock) {
+            testFence.cancel();testingState.value=emptySet();progress.value=progress.value.copy(running=false)
+            command("cancelTests")
+        }
+    }
+    fun installAsset(filename:String)=command("asset",filename)
+    fun refreshLogs()=command("logs")
+    fun clearLogs()=command("clearLogs")
+    fun systemLogs()=command("systemLogs")
+    fun queryExitIp()=command("ip")
+    fun refreshTraffic()=command("traffic")
+    fun resetTraffic()=command("resetTraffic")
+    fun setTrafficEnabled(enabled:Boolean)=command("stats",enabled.toString())
+    fun refreshConnections()=command("connections")
+    fun closeConnection(id:String)=command("closeConnection",id)
+    fun closeAllConnections()=command("closeAllConnections")
+    fun speedTest(nodeId:Long,mode:String="simple")=command("speed",JSONObject().put("id",nodeId).put("mode",mode).toString())
+    fun cancelSpeedTest()=command("cancelSpeed")
+    fun openPanel() { panelState.value="";command("panel") }
+    fun stun(server:String)=command("stun",server)
+    fun cancelStun()=command("cancelStun")
+    fun validateConfig(name:String,json:String) { submit {
+        val filename="validate-${java.util.UUID.randomUUID()}.json"
+        val file=android.util.AtomicFile(java.io.File(context.noBackupFilesDir,filename))
+        try { val bytes=json.toByteArray(Charsets.UTF_8);require(bytes.size<=64*1024*1024);val output=file.startWrite();try { output.write(bytes);file.finishWrite(output) } catch(e:Exception) { file.failWrite(output);throw e };ensureBinding();val runtime=connectedRuntime();runtime.command("validate",JSONObject().put("file",filename).put("name",name).toString()) }
+        catch(e:Exception) { file.delete();validationState.update { it+(name to (e.message ?: "验证失败")) } }
+    } }
+    suspend fun checkConfig(json:String) {
+        val name="save-${java.util.UUID.randomUUID()}"
+        validateConfig(name,json)
+        val error=withTimeout(30000) { validationResults.first { it.containsKey(name) }.getValue(name) }
+        validationState.update { it-name }
+        require(error.isBlank()) { error }
+    }
+    fun restore(data:AppData) { submit {
+        val name="restore-${java.util.UUID.randomUUID()}.json"
+        val stage=android.util.AtomicFile(java.io.File(context.noBackupFilesDir,name))
+        try {
+            val bytes=data.validate().toJson().toByteArray(Charsets.UTF_8);require(bytes.size<=64*1024*1024)
+            val output=stage.startWrite();try { output.write(bytes);stage.finishWrite(output) } catch(e:Exception) { stage.failWrite(output);throw e }
+            ensureBinding();(remote ?: error("后台服务尚未就绪")).command("restore",name)
+        } catch(e:Exception) { stage.delete();event.emit(e.message ?: "恢复失败") }
+    } }
+    fun close() {
+        runCatching {remote?.command("uiVisible","$visibilityToken|false")}
+        commands.close();switchGate.clear();synchronized(bindingLock) {invalidateBinding();clearPendingTests()};runCatching {callback?.let {remote?.unregisterCallback(it)}};callback=null;if(bound) { context.unbindService(connection);bound=false };remote=null;scope.cancel() }
+    companion object {
+        // ponytail: serialize group application/tests; foreground work is needed if queues exceed WorkManager's window.
+        private val subscriptionApply=Mutex()
+        private fun runningServiceClass(context:Context):Class<*>? {
+            @Suppress("DEPRECATION") val running=(context.getSystemService(Context.ACTIVITY_SERVICE) as android.app.ActivityManager).getRunningServices(50).firstOrNull { it.foreground && it.service.packageName==context.packageName && it.service.className in setOf(ZaneVpnService::class.java.name,ZaneProxyService::class.java.name) } ?: return null
+            return if(running.service.className==ZaneProxyService::class.java.name)ZaneProxyService::class.java else ZaneVpnService::class.java
+        }
+        suspend fun isConnected(context:Context):Boolean {
+            val target=runningServiceClass(context) ?: return false
+            val client=ServiceClient(context,target)
+            return try { withTimeout(5000) { client.readSnapshot().state==2 } } catch(_:Exception) { false } finally { client.close() }
+        }
+        suspend fun updateSubscription(context:Context,groupId:Long,onApplied:()->Unit={}) {
+            val client=ServiceClient(context,runningServiceClass(context) ?: RuntimeServiceTarget.serviceClass(context))
+            try {client.applySubscription(groupId,onApplied)} finally {client.close()}
+        }
+    }
+}

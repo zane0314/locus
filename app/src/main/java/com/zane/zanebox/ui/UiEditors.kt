@@ -1,0 +1,442 @@
+@file:OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+package com.zane.zanebox.ui
+
+import android.content.ClipData
+import android.content.ClipboardManager
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.items
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.zane.zanebox.data.*
+import com.zane.zanebox.config.*
+import com.zane.zanebox.subscription.SubscriptionOptions
+import org.json.JSONArray
+import org.json.JSONObject
+
+@Composable internal fun TextEditPage(editor:TextEditor,onDismiss:()->Unit) {
+    var values by remember(editor){mutableStateOf(editor.fields.map{it.second})}
+    var error by remember{mutableStateOf("")}
+    UiPageList(editor.title,onDismiss,action={TextButton(onClick={runCatching{editor.save(values)}.onSuccess{onDismiss()}.onFailure{error=it.message ?: "字段无效"}},modifier=Modifier.testTag("editor_save")){Text(uiText("保存"))}}) {
+        items(editor.fields.indices.toList()){i->OutlinedTextField(values[i],{v->values=values.toMutableList().apply{this[i]=v};error=""},label={Text(uiText(editor.fields[i].first))},
+            visualTransformation=if(editor.fields[i].first.contains("密码"))PasswordVisualTransformation() else VisualTransformation.None,
+            modifier=Modifier.fillMaxWidth().testTag("editor_field_$i"))}
+        if(error.isNotBlank())item{Text(uiText(error),color=MaterialTheme.colorScheme.error,modifier=Modifier.testTag("editor_error"))}
+    }
+}
+
+@Composable internal fun TargetPicker(title:String,value:String,data:AppData,onDismiss:()->Unit,onChoose:(String)->Unit,smart:Boolean=false,none:Boolean=false) {
+    var openGroupId by remember{mutableStateOf<Long?>(null)}
+    val group=if(smart)data.groups.firstOrNull{it.id==openGroupId && it.enabled}else null
+    if(group!=null) {
+        ChoiceDialog(group.name,normalizeSmartTarget(value),listOf("group:${group.id}" to uiText("整个分组"))+
+            data.nodes.filter{it.groupId==group.id}.map{"node:${it.id}" to it.name},{openGroupId=null},translateTitle=false,translateChoices=false) {
+            onChoose(it);onDismiss()
+        }
+        return
+    }
+    val choices=buildList {
+        if(none)add("0" to uiText("无"))
+        if(smart)addAll(listOf("off" to "关闭","proxy" to "代理","direct" to "直连","auto" to "自动选择").map{it.first to uiText(it.second)})
+        else if(!none)addAll(listOf("proxy" to "代理","direct" to "直连","block" to "阻止").map{it.first to uiText(it.second)})
+        data.groups.filter{it.enabled}.forEach{add("group:${it.id}" to uiText("分组 · %s",it.name))}
+        data.merges.forEach{add("merge:${it.id}" to uiText("汇总组 · %s",it.name))}
+        if(!smart)data.nodes.filter{n->data.groups.any{it.id==n.groupId && it.enabled}}.forEach{add("node:${it.id}" to it.name)}
+    }
+    val selected=if(smart && value.startsWith("node:"))data.nodes.firstOrNull{it.id==value.substringAfter(':').toLongOrNull()}?.let{"group:${it.groupId}"} ?: value
+        else if(smart)normalizeSmartTarget(value)else value
+    ChoiceDialog(title,selected,choices,onDismiss,dismissOnChoose=!smart,translateChoices=false) {
+        if(smart && it.startsWith("group:"))openGroupId=it.substringAfter(':').toLong()
+        else {onChoose(it);if(smart)onDismiss()}
+    }
+}
+@Composable internal fun targetLabel(value:String,data:AppData)=targetName(value,data,LocalUiLanguage.current)
+
+internal fun targetName(value:String,data:AppData,language:String="zh-CN"):String {
+    val fixed=when(normalizeSmartTarget(value)) {
+        "off"->"关闭";"auto"->"自动选择";"proxy"->"代理";"direct"->"直连";"block"->"阻止";"0"->"无"
+        else->null
+    }
+    if(fixed!=null)return translateText(fixed,language)
+    return when(value.substringBefore(':')) {
+        "node"->data.nodes.firstOrNull{it.id==value.substringAfter(':').toLongOrNull()}?.name ?: translateText("节点已删除",language)
+        "group"->data.groups.firstOrNull{it.id==value.substringAfter(':').toLongOrNull()}?.name ?: translateText("分组已删除",language)
+        "merge"->data.merges.firstOrNull{it.id==value.substringAfter(':').toLongOrNull()}?.name ?: translateText("汇总组已删除",language)
+        else->value
+    }
+}
+
+private data class NodeField(val title:String,val path:String,val kind:String="text",val choices:List<String> = emptyList())
+
+/** Edits a field without dropping unexposed or future protocol properties. */
+internal fun updateNodeField(text:String,path:String,value:String,kind:String):String {
+    val root=JSONObject(text);var target=root
+    if(root.optString("type")=="hysteria2" && path=="server_ports") {
+        if(value.isBlank())root.remove("server_ports") else com.zane.zanebox.subscription.SubscriptionParser.applyHysteriaPorts(root,value.replace('\n',','))
+        return root.toString()
+    }
+    if(root.optString("type")=="hysteria2" && path=="server_port" && value.isNotBlank())root.remove("server_ports")
+    if(path=="transport.type") {
+        if(value.isBlank())root.remove("transport")
+        else if(root.optJSONObject("transport")?.optString("type")!=value)root.put("transport",JSONObject().put("type",value))
+        return root.toString()
+    }
+    val keys=path.split('.')
+    keys.dropLast(1).forEach{key->target=target.optJSONObject(key) ?: JSONObject().also{target.put(key,it)}}
+    val key=keys.last()
+    if(value.isBlank() && kind!="bool")target.remove(key)
+    else target.put(key,when(kind){"number"->value.toInt();"bool"->value.toBooleanStrict();"list"->JSONArray(value.split('\n',',').map{it.trim()}.filter{it.isNotEmpty()});"json"->JSONObject(value);
+        "reserved"->if(value.trim().startsWith('['))JSONArray(value).also{a->require(a.length()==3 && (0 until a.length()).all{a.getInt(it) in 0..255}){"保留字节须为 3 个 0–255 整数"}} else value.trim().removeSurrounding("\"").also{require(it.matches(Regex("[A-Za-z0-9+/]{4}"))){"保留字节须为 3 字节 Base64 或整数数组"}};
+        else->value})
+    return root.toString()
+}
+private fun nodeField(text:String,path:String):String {
+    var value:Any=JSONObject(text)
+    path.split('.').forEach{key->value=(value as? JSONObject)?.opt(key) ?: return ""}
+    return if(value is JSONArray) {if(path=="reserved")value.toString() else (0 until value.length()).joinToString("\n"){value.opt(it).toString()}} else value.toString()
+}
+
+internal fun jsonFieldText(root:JSONObject,key:String):String {
+    fun text(value:Any?):String=when(value) {
+        null,JSONObject.NULL->""
+        is JSONArray->(0 until value.length()).joinToString("\n"){value.opt(it).toString()}
+        is JSONObject->value.toString(2)
+        else->value.toString()
+    }
+    return if(key in listOf("port","source_port"))listOf(text(root.opt(key)),text(root.opt("${key}_range"))).filter{it.isNotBlank()}.joinToString("\n") else text(root.opt(key))
+}
+internal fun updateRuleField(text:String,key:String,value:String):String=JSONObject(text).apply {
+    if(key in listOf("port","source_port"))remove("${key}_range")
+    if(value.isBlank())remove(key) else put(key,if(key=="customRule")JSONObject(value) else value.trim())
+}.toString()
+
+@Composable internal fun NodeEditor(node:Node?,data:AppData,initialProtocol:String="vless",onDismiss:()->Unit,saveError:String="",saving:Boolean=false,onCreateChain:(()->Unit)?=null,onSave:(Node)->Unit) {
+    val newChainName=uiText("新链路")
+    var name by remember{mutableStateOf(node?.name ?: if(initialProtocol=="chain")newChainName else "")}
+    var nameEdited by remember{mutableStateOf(false)}
+    var outbound by remember{mutableStateOf(node?.outbound?.let{raw->JSONObject(raw).apply{if(optString("type")=="ssh" && has("username")){if(!has("user"))put("user",get("username"));remove("username")};com.zane.zanebox.config.ConfigBuilder.normalizeTransportHost(this)}.toString()} ?: (if(initialProtocol=="chain")"{\"type\":\"chain\",\"node_ids\":[]}" else "{\"type\":\"vless\",\"server_port\":443}"))}
+    var group by remember{mutableLongStateOf(node?.groupId ?: data.browseGroupId.takeIf{id->data.groups.any{it.id==id}} ?: data.groups.firstOrNull{it.enabled}?.id ?:0L)}
+    var editing by remember{mutableStateOf<NodeField?>(null)}
+    var trojanGo by remember{mutableStateOf(node?.metadata?.let{JSONObject(it).optString("editorProtocol")=="trojan-go"} ?:false)}
+    var chainTargets by remember{mutableStateOf(node?.let(::nodeChainTargets) ?: if(initialProtocol=="chain")ChainTargets()else ChainTargets("inherit","inherit"))}
+    var chainSide by remember{mutableStateOf("")}
+    var chainAdd by remember{mutableStateOf(false)}
+    var typeChoice by remember{mutableStateOf(false)};var groupChoice by remember{mutableStateOf(false)}
+    var error by remember{mutableStateOf("")}
+    val type=JSONObject(outbound).optString("type")
+    val sourceManaged=node?.let{JSONObject(it.metadata).optLong("chainSourceNodeId")>0} ?: false
+    val chainNames=if(type=="chain")JSONObject(outbound).optJSONArray("node_ids")?.let{a->(a.length()-1 downTo 0).mapNotNull{i->data.nodes.firstOrNull{it.id==a.optLong(i)}?.name}} ?: emptyList()else emptyList()
+    val generatedName=if(chainNames.isEmpty())newChainName else uiText("%s 链式代理",chainNameParts(chainNames,chainTargets,data).joinToString(" → "))
+    LaunchedEffect(generatedName,type){if(node==null && type=="chain" && !nameEdited)name=generatedName}
+    val protocols=listOf("socks","http","shadowsocks","vmess","vless","trojan","trojan-go","hysteria","hysteria2","tuic","anytls","ssh","wireguard","juicity","snell","shadowtls","ninja","chain","custom")
+    fun field(title:String,path:String,kind:String="text",choices:List<String> = emptyList())=NodeField(title,path,kind,choices)
+    val fields=buildList {
+        if(type in listOf("chain","custom"))return@buildList
+        add(field("服务器地址","server"));add(field("服务器端口","server_port","number"))
+        if(type in listOf("vmess","vless","tuic","juicity"))add(field("UUID","uuid"))
+        if(type in listOf("socks","http","naive","mieru"))add(field("用户名","username"))
+        if(type=="ssh")add(field("用户名","user"))
+        if(type in listOf("shadowsocks","shadowsocksr","trojan","hysteria2","tuic","anytls","socks","http","ssh","naive","mieru","juicity","shadowtls","ninja"))add(field("密码","password","password"))
+        if(type in listOf("shadowsocks","shadowsocksr"))add(field("加密方法","method",choices=listOf("2022-blake3-aes-128-gcm","2022-blake3-aes-256-gcm","aes-128-gcm","aes-256-gcm","chacha20-ietf-poly1305","none")))
+        if(type=="vmess"){add(field("加密方式","security",choices=listOf("auto","aes-128-gcm","chacha20-poly1305","none","zero")));add(field("Alter ID","alter_id","number"))}
+        if(type=="vless")add(field("Flow","flow",choices=listOf("","xtls-rprx-vision")))
+        if(type in listOf("vmess","vless"))add(field("数据包编码","packet_encoding",choices=listOf("","xudp","packetaddr")))
+        if(type=="socks")add(field("SOCKS 版本","version",choices=listOf("4","4a","5")))
+        if(type in listOf("hysteria","hysteria2")) {add(field("上传带宽（Mbps）","up_mbps","number"));add(field("下载带宽（Mbps）","down_mbps","number"));add(field("服务器端口范围","server_ports","list"))}
+        if(type=="hysteria2"){add(field("混淆类型","obfs.type",choices=listOf("","salamander")));add(field("混淆密码","obfs.password","password"))}
+        if(type=="hysteria"){add(field("认证字符串","auth_str"));add(field("混淆","obfs"))}
+        if(type=="tuic"){add(field("拥塞控制","congestion_control",choices=listOf("cubic","new_reno","bbr")));add(field("UDP 中继模式","udp_relay_mode",choices=listOf("native","quic")));add(field("零 RTT 握手","zero_rtt_handshake","bool"));add(field("心跳间隔","heartbeat"))}
+        if(type=="ssh"){add(field("私钥","private_key","list"));add(field("私钥口令","private_key_passphrase","password"));add(field("主机公钥","host_key","list"))}
+        if(type=="wireguard"){add(field("本机地址","local_address","list"));add(field("私钥","private_key","password"));add(field("对端公钥","peer_public_key"));add(field("预共享密钥","pre_shared_key","password"));add(field("MTU","mtu","number"));add(field("保留字节","reserved","reserved"))}
+        if(type=="shadowsocksr"){add(field("协议","protocol"));add(field("协议参数","protocol_param"));add(field("混淆","obfs"));add(field("混淆参数","obfs_param"))}
+        if(type=="snell"){add(field("PSK","psk","password"));add(field("版本","version","number"))}
+        if(type=="ninja"){
+            add(field("加密方法","method",choices=listOf("aes-128-gcm")));add(field("节点密码","node_password","password"));add(field("启用 pass","pass","bool"))
+            if(nodeField(outbound,"pass")=="true"){
+                add(field("Pass 加密方法","pass_options.method",choices=listOf("aes-128-gcm")));add(field("Pass 密码","pass_options.password","password"))
+                add(field("填充最小值","pass_options.padding_min","number"));add(field("填充模式","pass_options.padding_mode"));add(field("填充随机最大值","pass_options.padding_random_max","number"))
+            }
+        }
+        if(type=="shadowtls")add(field("版本","version","number"))
+        if(type in listOf("vmess","vless","trojan")) {
+            add(field("传输协议","transport.type",choices=listOf("","ws","http","httpupgrade","grpc","xhttp")))
+            when(nodeField(outbound,"transport.type")) {
+                "ws","httpupgrade","xhttp"->{add(field("路径","transport.path"));add(field("Host",if(nodeField(outbound,"transport.type")=="ws")"transport.headers.Host" else "transport.host"));if(nodeField(outbound,"transport.type")=="ws"){add(field("最大提前数据","transport.max_early_data","number"));add(field("提前数据请求头","transport.early_data_header_name"))}}
+                "http"->{add(field("Host","transport.host","list"));add(field("路径","transport.path"))}
+                "grpc"->add(field("服务名称","transport.service_name"))
+            }
+        }
+        if(type=="ninja") {
+            add(field("传输协议","transport.type",choices=listOf("","ws")))
+            if(nodeField(outbound,"transport.type")=="ws"){add(field("路径","transport.path"));add(field("Host","transport.headers.Host"))}
+        }
+        if(type !in listOf("wireguard","shadowsocksr","snell","ssh")) {
+            add(field("启用 TLS","tls.enabled","bool"))
+            if(nodeField(outbound,"tls.enabled")=="true") {
+                add(field("服务器名称（SNI）","tls.server_name"));add(field("ALPN","tls.alpn","list"));add(field("允许不安全 TLS","tls.insecure","bool"));add(field("证书","tls.certificate","list"))
+                add(field("启用 uTLS","tls.utls.enabled","bool"));if(nodeField(outbound,"tls.utls.enabled")=="true")add(field("uTLS 指纹","tls.utls.fingerprint",choices=listOf("chrome","firefox","safari","ios","android","edge","random","randomized")))
+                add(field("启用 Reality","tls.reality.enabled","bool"));if(nodeField(outbound,"tls.reality.enabled")=="true"){add(field("Reality 公钥","tls.reality.public_key"));add(field("Reality Short ID","tls.reality.short_id"))}
+                add(field("启用 ECH","tls.ech.enabled","bool"));if(nodeField(outbound,"tls.ech.enabled")=="true")add(field("ECH 配置","tls.ech.config","list"))
+            }
+        }
+        if(type in listOf("shadowsocks","vmess","vless","trojan")) {
+            add(field("启用连接复用","multiplex.enabled","bool"));if(nodeField(outbound,"multiplex.enabled")=="true") {
+                add(field("复用协议","multiplex.protocol",choices=listOf("h2mux","smux","yamux")));add(field("最大连接数","multiplex.max_connections","number"));add(field("最小流数","multiplex.min_streams","number"));add(field("最大流数","multiplex.max_streams","number"));add(field("填充","multiplex.padding","bool"))
+            }
+        }
+        add(field("TCP Fast Open","tcp_fast_open","bool"));add(field("UDP 分片","udp_fragment","bool"));add(field("连接超时","connect_timeout"))
+    }
+    UiPageList(if(node==null && type=="chain")"创建链式代理" else if(node==null)"手动添加" else "编辑节点",{if(!saving)onDismiss()},action={TextButton(enabled=!saving,onClick={
+        runCatching{val o=JSONObject(outbound);require(name.isNotBlank()){ "请输入节点名称" };when(type) {
+            "chain"->require((o.optJSONArray("node_ids")?.length() ?:0)>0){"请选择链式节点"}
+            "custom"->com.zane.zanebox.config.ConfigBuilder.validate(o.getJSONObject("config").toString())
+            else->{require(o.optString("server").isNotBlank()){ "请输入服务器地址" };if(type=="hysteria2" && (o.optJSONArray("server_ports")?.length() ?:0)>0) {
+                val ports=o.getJSONArray("server_ports");com.zane.zanebox.subscription.SubscriptionParser.applyHysteriaPorts(o,(0 until ports.length()).joinToString(","){ports.getString(it)})
+            } else require(o.optInt("server_port") in 1..65535){"端口须为 1–65535"}}
+        }
+        val link=if(node?.outbound==outbound)node.shareLink.takeIf{it.isNotBlank()}?.substringBefore('#')?.plus("#"+java.net.URLEncoder.encode(name,"UTF-8").replace("+","%20")) ?: "" else ""
+        val metadata=JSONObject(node?.metadata ?: "{}").apply{if(trojanGo)put("editorProtocol","trojan-go")else remove("editorProtocol")};val result=(node ?:Node(0,group,name,outbound)).copy(name=name,groupId=group,outbound=o.toString(),shareLink=link,metadata=metadata.toString());onSave(if(type=="chain")result.withChainTargets(chainTargets)else result)}.onFailure{error=it.message ?: "字段无效"}
+    },modifier=Modifier.testTag("node_save")){Text(uiText("保存"))}}) {
+        item{if(error.isNotBlank() || saveError.isNotBlank())Text(uiText(error.ifBlank{saveError}),color=MaterialTheme.colorScheme.error,modifier=Modifier.testTag("node_error"))}
+        item{OutlinedTextField(name,{name=it;nameEdited=true;error=""},label={Text(uiText("节点名称"))},singleLine=true,modifier=Modifier.fillMaxWidth().testTag("node_name"))}
+        item{UiCard{UiRow("协议",if(trojanGo)"Trojan-Go · TLS / WS" else type.uppercase(),Icons.Outlined.Cable,onClick=if(node==null)({typeChoice=true})else null);UiRow("分组",if(type=="chain")node?.let{data.groups.firstOrNull{g->g.id==it.groupId}?.name} ?: uiText("链式节点")else data.groups.firstOrNull{it.id==group}?.name ?: uiText("手动节点"),Icons.Outlined.Folder,translateSubtitle=false,onClick=if(type=="chain")null else ({groupChoice=true}))}}
+        if(type in listOf("shadowsocksr","mieru","naive"))item{Text(uiText("当前内核不提供 ShadowsocksR、Mieru、NaïveProxy 外部插件功能。已有配置可备份和导出，不能作为可用节点保存。"),style=MaterialTheme.typography.bodySmall)}
+        if(trojanGo)item{Text(uiText("Trojan-Go 使用原生 TLS / WebSocket；外部插件与额外加密层不可用。"),style=MaterialTheme.typography.bodySmall)}
+        if(type=="chain") {
+            val ids=JSONObject(outbound).optJSONArray("node_ids")?.let{a->(0 until a.length()).map{a.getLong(it)}.reversed()} ?: emptyList()
+            fun updateChain(values:List<Long>){outbound=JSONObject(outbound).put("node_ids",JSONArray(values.reversed())).toString()}
+            item{UiSection("链式节点 · 本机到出口")}
+            item{Text(uiText("按连接顺序排列，最后一跳为出口。"),style=MaterialTheme.typography.bodySmall)}
+            item{Text(uiText("创建新链保留原节点；链内引用只使用原始连接参数。"),style=MaterialTheme.typography.bodySmall)}
+            items(ids.indices.toList(),key={"chain_step_$it"}){index->
+                val n=data.nodes.firstOrNull{it.id==ids[index]}
+                UiCard{UiRow("${index+1}. ${n?.name ?: uiText("引用已失效")}",translateTitle=false,chevron=false,modifier=Modifier.testTag("chain_step_$index"),trailing=if(sourceManaged)null else ({
+                    Row {
+                        IconButton(enabled=index>0,onClick={updateChain(ids.toMutableList().apply{add(index-1,removeAt(index))})}){Icon(Icons.Outlined.ArrowUpward,uiText("上移"))}
+                        IconButton(enabled=index<ids.lastIndex,onClick={updateChain(ids.toMutableList().apply{add(index+1,removeAt(index))})}){Icon(Icons.Outlined.ArrowDownward,uiText("下移"))}
+                        IconButton(onClick={updateChain(ids.filterIndexed{i,_->i!=index})}){Icon(Icons.Outlined.Close,uiText("移除"))}
+                    }
+                }))}
+            }
+            if(sourceManaged)item{Text(uiText("来源节点由原订阅管理，更新时自动同步。"),style=MaterialTheme.typography.bodySmall)}
+            else item{TextButton(onClick={chainAdd=true},modifier=Modifier.testTag("chain_add_step")){Text(uiText("添加一跳"))}}
+
+        }
+        if(type=="chain") {
+            item{UiSection("链路设置")}
+            item{ChainTargetRows(chainTargets,data,{chainSide=it},"node")}
+        }
+
+        if(node!=null && type !in listOf("chain","custom"))item{UiCard{UiRow("当前默认链路",chainPathText(data,node.id),translateSubtitle=false,summaryLines=4);if(onCreateChain!=null)UiRow("创建链式副本",onClick=onCreateChain)}}
+        if(type=="custom")item{UiCard{UiRow("自定义配置","完整 sing-box 配置",Icons.Outlined.Code,onClick={editing=field("自定义配置","config","json")})}}
+        item{UiSection("代理设置")}
+        item{UiCard { fields.forEachIndexed{index,f->val value=nodeField(outbound,f.path)
+            UiRow(f.title,if(f.kind=="password" && value.isNotBlank())"••••••" else if(f.kind=="bool")"" else value.ifBlank{uiText("未设置")},translateSubtitle=false,onClick=if(f.kind=="bool")null else ({editing=f}),minHeight=58.dp,chevron=false,
+                modifier=Modifier.testTag("node_field_${f.path}"),trailing=if(f.kind=="bool")({UiSwitch(value=="true",{outbound=updateNodeField(outbound,f.path,it.toString(),f.kind)},modifier=Modifier)})else null)
+            if(index<fields.lastIndex)HorizontalDivider(Modifier.padding(horizontal=16.dp),thickness=.5.dp,color=MaterialTheme.colorScheme.outlineVariant.copy(alpha=.4f))
+        }}}
+        item{UiCard{UiRow("高级配置", "编辑完整节点配置",Icons.Outlined.Code,onClick={editing=field("高级配置","","outbound")})}}
+    }
+    if(chainAdd) {
+        val ids=JSONObject(outbound).optJSONArray("node_ids")?.let{a->(0 until a.length()).map{a.getLong(it)}.reversed()} ?: emptyList()
+        GroupedChainPicker("添加一跳",data,{chainAdd=false},{target->outbound=JSONObject(outbound).put("node_ids",JSONArray((ids+target.substringAfter(':').toLong()).reversed())).toString();chainAdd=false},allowGroup=false,allowedNodes=data.nodes.filter{it.id!=node?.id && it.id !in ids && JSONObject(it.outbound).optString("type")!="custom"}.map{it.id}.toSet())
+    }
+    if(chainSide.isNotBlank())ChainTargetPicker(if(chainSide=="front")"前置代理" else "后置代理（落地）",if(chainSide=="front")chainTargets.front else chainTargets.landing,data,{chainSide=""},{chainTargets=if(chainSide=="front")chainTargets.copy(front=it)else chainTargets.copy(landing=it)},inherit=true,excludeNodeId=node?.id)
+    if(typeChoice)ChoiceDialog("协议",if(trojanGo)"trojan-go" else type,protocols.map{it to when(it){"chain"->"链式代理";"custom"->"自定义配置";"trojan-go"->"Trojan-Go（TLS / WS）";else->it.uppercase()}},{typeChoice=false}){if(it=="chain")chainTargets=ChainTargets();trojanGo=it=="trojan-go";outbound=JSONObject().put("type",if(trojanGo)"trojan" else it).apply{if(trojanGo)put("tls",JSONObject().put("enabled",true));if(it=="custom")put("config",JSONObject()) else if(it=="chain")put("node_ids",JSONArray())else put("server",nodeField(outbound,"server")).put("server_port",when(it){"socks"->1080;"http"->8080;"ssh"->22;"wireguard"->51820;else->443})}.toString()}
+    if(groupChoice)ChoiceDialog("分组",group.toString(),listOf("0" to uiText("手动节点"))+data.groups.map{it.id.toString() to it.name},{groupChoice=false},translateChoices=false){group=it.toLong()}
+    editing?.let{f->
+        if(f.choices.isNotEmpty())ChoiceDialog(f.title,nodeField(outbound,f.path),f.choices.map{it to it.ifBlank{"无"}},{editing=null}){outbound=updateNodeField(outbound,f.path,it,f.kind)}
+        else TextEditPage(TextEditor(f.title,listOf(f.title to if(f.kind=="outbound")JSONObject(outbound).toString(2) else nodeField(outbound,f.path))){v->
+            if(f.kind=="outbound"){val o=JSONObject(v[0]);require(o.optString("type").isNotBlank());outbound=o.toString()}else outbound=updateNodeField(outbound,f.path,v[0],f.kind)
+        }){editing=null}
+    }
+}
+
+@Composable internal fun GroupEditor(group:Group?,data:AppData,onDismiss:()->Unit,saveError:String="",saving:Boolean=false,onCreateChain:(()->Unit)?=null,onSave:(Group)->Unit) {
+    val original=remember(group?.id,group?.options){runCatching{JSONObject(group?.options ?: "{}")} .getOrDefault(JSONObject())}
+    var name by remember(group?.id){mutableStateOf(group?.name ?: "")}
+    var url by remember(group?.id){mutableStateOf(group?.subscriptionUrl ?: "")}
+    var groupType by remember(group?.id,group?.options){mutableIntStateOf(original.optInt("type",if(group?.subscriptionUrl.isNullOrBlank())0 else 1))}
+    var sortOrder by remember(group?.id,group?.options){mutableIntStateOf(if(group==null)0 else when(nodeSortMode(data,group)){NodeSortMode.NAME->1;NodeSortMode.LATENCY->2;else->0})}
+    var selector by remember(group?.id,group?.options){mutableStateOf(original.optBoolean("groupIsSelector",original.optBoolean("isSelector",false)))}
+    var chainTargets by remember(group?.id){mutableStateOf(group?.let(::groupChainTargets) ?: ChainTargets("none","none"))}
+    var autoUpdate by remember(group?.id,group?.options){mutableStateOf(original.optBoolean("autoUpdate",false))}
+    var autoUpdateDelay by remember(group?.id,group?.options){mutableStateOf(original.optInt("autoUpdateDelay",1440).toString())}
+    var connectedOnly by remember(group?.id,group?.options){mutableStateOf(original.optBoolean("updateWhenConnectedOnly",false))}
+    var customUserAgent by remember(group?.id,group?.options){mutableStateOf(original.optString("customUserAgent"))}
+    var filterMode by remember(group?.id,group?.options){mutableIntStateOf(original.optInt("filterMode",0))}
+    var filterRegex by remember(group?.id,group?.options){mutableStateOf(original.optString("filterRegex"))}
+    var deduplication by remember(group?.id,group?.options){mutableStateOf(original.optBoolean("deduplication",false))}
+    var forceResolve by remember(group?.id,group?.options){mutableStateOf(original.optBoolean("forceResolve",false))}
+    var serverDnsResolver by remember(group?.id,group?.options){mutableStateOf(original.optString("serverDnsResolver"))}
+    var target by remember{mutableStateOf("")};var choice by remember{mutableStateOf("")};var error by remember{mutableStateOf("")}
+    val filterLabels=listOf("关闭","保留匹配","排除匹配")
+    fun save() {
+        runCatching {
+            require(name.isNotBlank()){ "请输入分组名称" }
+            require(sortOrder in 0..2) { "分组排序无效" }
+            require(groupType in 0..1){ "分组类型无效" }
+            if(groupType==1)require(url.isNotBlank()){ "订阅分组必须填写订阅 URL" }
+            if(url.isNotBlank()){
+                val u=java.net.URI(url.trim())
+                require(u.scheme in listOf("https","http") && !u.host.isNullOrBlank()){ "请输入有效订阅 URL" }
+            }
+            val options=JSONObject(original.toString())
+                .put("type",groupType).put("groupIsSelector",selector).put("groupOrder",sortOrder).put("nodeSortOrder",sortOrder)
+                .put("isSelector",selector)
+                .put("autoUpdate",autoUpdate).put("autoUpdateDelay",autoUpdateDelay.toInt())
+                .put("updateWhenConnectedOnly",connectedOnly).put("customUserAgent",customUserAgent)
+                .put("filterMode",filterMode).put("filterRegex",filterRegex)
+                .put("deduplication",deduplication).put("forceResolve",forceResolve)
+                .put("serverDnsResolver",serverDnsResolver)
+            SubscriptionOptions.parse(options.toString())
+            val result=(group ?:Group(0,name)).copy(name=name,subscriptionUrl=url.trim(),options=options.toString());onSave(if(group!=null && isChainGroup(group))result.withChainTargets(chainTargets)else result)
+        }.onFailure{error=it.message ?: "字段无效"}
+    }
+    UiPageList(if(group==null)"添加订阅" else "编辑分组",{if(!saving)onDismiss()},action={TextButton(enabled=!saving,onClick=::save,modifier=Modifier.testTag("group_save")){Text(uiText("保存"))}}) {
+        item{OutlinedTextField(name,{name=it},label={Text(uiText("分组名称"))},singleLine=true,modifier=Modifier.fillMaxWidth().testTag("group_name"))}
+        if(group==null || !isChainGroup(group))item{OutlinedTextField(url,{url=it},label={Text(uiText("订阅 URL"))},supportingText={Text(uiText("基础分组可留空"))},modifier=Modifier.fillMaxWidth().testTag("group_url"))}
+        item{UiCard{
+            UiRow("分组类型",if(groupType==1)"订阅分组" else "基础分组",Icons.Outlined.Folder,onClick={choice="type"},modifier=Modifier.testTag("group_type"))
+            UiRow("节点排序",listOf("原始顺序","按名称","按延迟")[sortOrder.coerceIn(0,2)],onClick={choice="order"},modifier=Modifier.testTag("group_order"))
+            UiRow("选择器",if(selector)"启用" else "关闭",Icons.Outlined.Tune,onClick={selector=!selector},trailing={UiSwitch(selector,{selector=it},modifier=Modifier.testTag("group_selector"))},modifier=Modifier.testTag("group_selector_row"))
+        }}
+        if(group!=null && isChainGroup(group)) {
+            item{Text(uiText("来源：%s，随原订阅更新",data.groups.firstOrNull{it.id==JSONObject(group.options).optLong("chainSourceGroupId")}?.name ?: uiText("引用已失效")),style=MaterialTheme.typography.bodySmall)}
+            item{UiSection("链式代理")}
+            item{ChainTargetRows(chainTargets,data,{target=it},"group")}
+        } else if(group!=null) {
+            item{UiCard{UiRow("链式代理",uiText("前置：%s；后置：%s",chainTargetLabel(chainTargets.front,data),chainTargetLabel(chainTargets.landing,data)),translateSubtitle=false,summaryLines=3);if(onCreateChain!=null)UiRow("创建链式副本",onClick=onCreateChain)}}
+        }
+        if(groupType==1 || url.isNotBlank()) {
+            item{UiSection("订阅更新")}
+            item{UiCard{
+                Row(Modifier.fillMaxWidth().padding(horizontal=16.dp,vertical=8.dp)){Text(uiText("自动更新"),Modifier.weight(1f));UiSwitch(autoUpdate,{autoUpdate=it},modifier=Modifier.testTag("group_auto_update"))}
+                OutlinedTextField(autoUpdateDelay,{autoUpdateDelay=it},label={Text(uiText("自动更新间隔（分钟）"))},singleLine=true,modifier=Modifier.fillMaxWidth().padding(horizontal=16.dp).testTag("group_auto_update_delay"))
+                Row(Modifier.fillMaxWidth().padding(horizontal=16.dp,vertical=8.dp)){Text(uiText("仅连接时更新"),Modifier.weight(1f));UiSwitch(connectedOnly,{connectedOnly=it},modifier=Modifier.testTag("group_connected_only"))}
+                OutlinedTextField(customUserAgent,{customUserAgent=it},label={Text(uiText("订阅 User-Agent"))},singleLine=true,modifier=Modifier.fillMaxWidth().padding(horizontal=16.dp).testTag("group_user_agent"))
+            }}
+            item{UiCard{
+                Row(Modifier.fillMaxWidth().padding(horizontal=16.dp,vertical=8.dp)){Text(uiText("强制解析服务器 IP"),Modifier.weight(1f));UiSwitch(forceResolve,{forceResolve=it},modifier=Modifier.testTag("group_force_resolve"))}
+                Row(Modifier.fillMaxWidth().padding(horizontal=16.dp,vertical=8.dp)){Text(uiText("按协议身份去重"),Modifier.weight(1f));UiSwitch(deduplication,{deduplication=it},modifier=Modifier.testTag("group_deduplication"))}
+                OutlinedTextField(serverDnsResolver,{serverDnsResolver=it},label={Text(uiText("服务器地址 DNS（空为默认）"))},singleLine=true,modifier=Modifier.fillMaxWidth().padding(horizontal=16.dp).testTag("group_server_dns"))
+            }}
+            item{UiCard{
+                UiRow("节点名称过滤",filterLabels[filterMode.coerceIn(filterLabels.indices)],Icons.Outlined.FilterList,onClick={choice="filter"},modifier=Modifier.testTag("group_filter_mode"))
+                OutlinedTextField(filterRegex,{filterRegex=it},label={Text(uiText("过滤正则表达式"))},modifier=Modifier.fillMaxWidth().padding(horizontal=16.dp).testTag("group_filter_regex"))
+            }}
+        }
+        if(error.isNotBlank() || saveError.isNotBlank())item{Text(uiText(error.ifBlank{saveError}),color=MaterialTheme.colorScheme.error,modifier=Modifier.testTag("group_error"))}
+    }
+    if(target.isNotBlank())ChainTargetPicker(if(target=="front")"前置代理" else "后置代理（落地）",if(target=="front")chainTargets.front else chainTargets.landing,data,{target=""},{chainTargets=if(target=="front")chainTargets.copy(front=it)else chainTargets.copy(landing=it)})
+    when(choice) {
+        "type"->ChoiceDialog("分组类型",groupType.toString(),listOf("0" to "基础分组","1" to "订阅分组"),{choice=""}){groupType=it.toInt();choice=""}
+        "order"->ChoiceDialog("节点排序",sortOrder.toString(),listOf("0" to "原始顺序","1" to "按名称","2" to "按延迟"),{choice=""}){sortOrder=it.toInt();choice=""}
+        "filter"->ChoiceDialog("节点名称过滤",filterMode.toString(),filterLabels.mapIndexed{index,label->index.toString() to label},{choice=""}){filterMode=it.toInt();choice=""}
+    }
+}
+
+@Composable internal fun RuleEditor(rule:RouteRule?,data:AppData,onDismiss:()->Unit,saveError:String="",saving:Boolean=false,onSave:(RouteRule)->Unit) {
+    var name by remember{mutableStateOf(rule?.name ?: "")};var domains by remember{mutableStateOf(rule?.domains ?: "")}
+    var packages by remember{mutableStateOf(rule?.packages ?: "")};var ips by remember{mutableStateOf(rule?.ipCidrs ?: "")}
+    var target by remember{mutableStateOf(rule?.outbound ?: "proxy")};var priority by remember{mutableStateOf(rule?.prioritize ?:false)}
+    var advanced by remember{mutableStateOf(rule?.advanced ?:"{}")};var choose by remember{mutableStateOf(false)};var apps by remember{mutableStateOf(false)}
+    var editAdvanced by remember{mutableStateOf(false)};var editRouteField by remember{mutableStateOf("")};var error by remember{mutableStateOf("")}
+    var positionChoice by remember{mutableStateOf(false)}
+    val matching=runCatching{JSONObject(advanced)}.getOrDefault(JSONObject())
+    val routePort=jsonFieldText(matching,"port");val routeSource=jsonFieldText(matching,"source_ip_cidr")
+    val routeSourcePort=jsonFieldText(matching,"source_port");val routeRuleset=jsonFieldText(matching,"rule_set")
+    val routeNetwork=jsonFieldText(matching,"network");val routeProtocol=jsonFieldText(matching,"protocol")
+    val customRule=jsonFieldText(matching,"customRule")
+    val editors=remember{mutableMapOf<String,String>()}
+    val editorSaves=remember{mutableMapOf<String,(String)->Unit>()}
+    fun editValue(title:String,value:String,onValue:(String)->Unit) { editRouteField=title;editors[title]=value;editorSaves[title]=onValue }
+    UiPageList(if(rule==null)"添加规则" else "编辑规则",{if(!saving)onDismiss()},action={TextButton(enabled=!saving,onClick={runCatching{
+        require(name.isNotBlank()){ "请输入规则名称" }
+        com.zane.zanebox.config.ConfigBuilder.normalizeAdvanced(JSONObject(advanced))
+        onSave((rule ?:RouteRule(0,name)).copy(name=name,domains=domains,packages=packages,ipCidrs=ips,outbound=target,prioritize=priority,advanced=advanced))
+    }.onFailure{error=it.message ?: "字段无效"}},modifier=Modifier.testTag("rule_save")){Text(uiText("保存"))}}) {
+        item{OutlinedTextField(name,{name=it},label={Text(uiText("规则名称"))},modifier=Modifier.fillMaxWidth().testTag("rule_name"))}
+        item{UiCard{UiRow("出站",targetLabel(target,data),Icons.Outlined.AccountTree,onClick={choose=true},translateSubtitle=false,modifier=Modifier.testTag("rule_target"));UiRow("规则位置",if(priority)"前置 · 在应用策略之前" else "后置 · 在应用策略之后",onClick={positionChoice=true},modifier=Modifier.testTag("rule_position"))}}
+        item{OutlinedTextField(domains,{domains=it},label={Text(uiText("域名（每行一个）"))},modifier=Modifier.fillMaxWidth().testTag("rule_domains"))}
+        item{OutlinedTextField(ips,{ips=it},label={Text(uiText("IP CIDR（每行一个）"))},modifier=Modifier.fillMaxWidth().testTag("rule_ips"))}
+        item{UiCard{UiRow("应用",if(packages.isBlank())"所有应用" else uiText("已选择 %s 个应用",packages.lines().count{it.isNotBlank()}),Icons.Outlined.Apps,onClick={apps=true})}}
+        item{OutlinedTextField(packages,{packages=it},label={Text(uiText("应用包名（每行一个）"))},modifier=Modifier.fillMaxWidth().testTag("rule_packages"))}
+        item{UiSection("路由匹配")}
+        item{UiCard{
+            UiRow("目标端口",routePort.ifBlank{"未设置"},Icons.Outlined.Tune,onClick={editValue("目标端口",routePort){advanced=updateRuleField(advanced,"port",it)}},modifier=Modifier.testTag("rule_port"))
+            UiRow("来源 IP",routeSource.ifBlank{"未设置"},Icons.Outlined.Home,onClick={editValue("来源 IP",routeSource){advanced=updateRuleField(advanced,"source_ip_cidr",it)}},modifier=Modifier.testTag("rule_source"))
+            UiRow("来源端口",routeSourcePort.ifBlank{"未设置"},Icons.Outlined.Tune,onClick={editValue("来源端口",routeSourcePort){advanced=updateRuleField(advanced,"source_port",it)}},modifier=Modifier.testTag("rule_source_port"))
+            UiRow("规则集",routeRuleset.ifBlank{"未设置"},Icons.Outlined.Storage,onClick={editValue("规则集",routeRuleset){advanced=updateRuleField(advanced,"rule_set",it)}},modifier=Modifier.testTag("rule_ruleset"))
+            UiRow("网络",routeNetwork.ifBlank{"未设置"},Icons.Outlined.Settings,onClick={editValue("网络",routeNetwork){advanced=updateRuleField(advanced,"network",it)}},modifier=Modifier.testTag("rule_network"))
+            UiRow("协议",routeProtocol.ifBlank{"未设置"},Icons.Outlined.Tune,onClick={editValue("协议",routeProtocol){advanced=updateRuleField(advanced,"protocol",it)}},modifier=Modifier.testTag("rule_protocol"))
+            UiRow("自定义规则",if(customRule.isBlank())"未设置" else "已设置 JSON",Icons.Outlined.Code,onClick={editValue("自定义规则",customRule){advanced=updateRuleField(advanced,"customRule",it)}},modifier=Modifier.testTag("rule_custom_rule"))
+            UiRow("其他高级匹配",advanced.takeIf{it!="{}"} ?: "无",Icons.Outlined.Tune,onClick={editAdvanced=true},modifier=Modifier.testTag("rule_advanced"))
+        }}
+        if(error.isNotBlank() || saveError.isNotBlank())item{Text(uiText(error.ifBlank{saveError}),color=MaterialTheme.colorScheme.error)}
+    }
+    if(positionChoice)ChoiceDialog("规则位置",priority.toString(),listOf("true" to "前置 · 在应用策略之前","false" to "后置 · 在应用策略之后"),{positionChoice=false}){priority=it.toBoolean()}
+    if(choose)TargetPicker("出站",target,data,{choose=false},{target=it})
+    if(apps)AppsEditor(packages.lines().filter{it.isNotBlank()}.toSet(),{apps=false}){packages=it.joinToString("\n");apps=false}
+    if(editAdvanced)TextEditPage(TextEditor("高级匹配",listOf("匹配参数 JSON" to advanced)){JSONObject(it[0]);advanced=it[0]}){editAdvanced=false}
+    if(editRouteField.isNotBlank()) {
+        val title=editRouteField;val value=editors[title].orEmpty();val save=editorSaves[title]
+        TextEditPage(TextEditor(title,listOf(title to value)){values->
+            val key=when(title){"目标端口"->"port";"来源端口"->"source_port";"网络"->"network";else->""}
+            if(key.isNotBlank() && values[0].isNotBlank())com.zane.zanebox.config.ConfigBuilder.normalizeAdvanced(JSONObject().put(key,values[0]))
+            if(title=="自定义规则" && values[0].isNotBlank())JSONObject(values[0])
+            save?.invoke(values[0]);editRouteField=""
+        }){editRouteField=""}
+    }
+}
+
+@Composable internal fun MergeEditor(merge:MergeGroup?,data:AppData,onDismiss:()->Unit,saveError:String="",saving:Boolean=false,onSave:(MergeGroup)->Unit) {
+    var name by remember{mutableStateOf(merge?.name ?:"")};var mode by remember{mutableStateOf(merge?.mode ?:"selector")}
+    var nodes by remember{mutableStateOf(merge?.nodeIds?.toSet() ?:emptySet())};var groups by remember{mutableStateOf(merge?.groupIds?.toSet() ?:emptySet())}
+    var openGroup by remember{mutableStateOf<Long?>(null)}
+    var selected by remember{mutableLongStateOf(merge?.selectedId ?:0L)};var choose by remember{mutableStateOf(false)};var error by remember{mutableStateOf("")}
+    UiPageList(if(merge==null)"添加节点汇总组" else "编辑节点汇总组",{if(!saving)onDismiss()},action={TextButton(enabled=!saving,onClick={
+        if(name.isBlank())error="请输入汇总组名称" else if(nodes.isEmpty() && groups.isEmpty())error="请选择分组或节点" else onSave(MergeGroup(merge?.id ?:0,name,nodes.toList(),groups.toList(),mode,selected))
+    },modifier=Modifier.testTag("merge_save")){Text(uiText("保存"))}}) {
+        item{OutlinedTextField(name,{name=it},label={Text(uiText("汇总组名称"))},modifier=Modifier.fillMaxWidth().testTag("merge_name"))}
+        item{Row(horizontalArrangement=Arrangement.spacedBy(8.dp)){FilterChip(mode=="selector",{mode="selector"},label={Text(uiText("手动选择"))});FilterChip(mode=="urltest",{mode="urltest"},label={Text(uiText("自动测速"))})}}
+        item{UiCard{UiRow("默认节点",data.nodes.firstOrNull{it.id==selected}?.name ?:uiText("自动选择"),translateSubtitle=false,onClick={choose=true})}}
+        item{UiSection("订阅分组")}
+        items(data.groups,key={"g${it.id}"}){g->UiCard{UiRow(g.name,if(g.id in groups)uiText("整个分组")else uiText("已选择 %s 个节点",data.nodes.count{it.groupId==g.id && it.id in nodes}),translateTitle=false,translateSubtitle=false,modifier=Modifier.testTag("merge_group_${g.id}"),onClick={openGroup=g.id},trailing={Row {
+            Checkbox(g.id in groups,{groups=if(it)groups+g.id else groups-g.id},modifier=Modifier.testTag("merge_group_check_${g.id}"))
+            IconButton(onClick={openGroup=g.id},modifier=Modifier.testTag("merge_group_open_${g.id}")){Icon(Icons.Outlined.ChevronRight,uiText("选择节点"))}
+        }})}}
+        if(error.isNotBlank() || saveError.isNotBlank())item{Text(uiText(error.ifBlank{saveError}),color=MaterialTheme.colorScheme.error)}
+    }
+    data.groups.firstOrNull{it.id==openGroup}?.let{g->
+        UiPageList(g.name,{openGroup=null},action={TextButton(onClick={openGroup=null},modifier=Modifier.testTag("merge_members_done")){Text(uiText("完成"))}}) {
+            item{UiCard{UiRow("整个分组",onClick={groups=if(g.id in groups)groups-g.id else groups+g.id},trailing={Checkbox(g.id in groups,{groups=if(it)groups+g.id else groups-g.id})},modifier=Modifier.testTag("merge_members_group"))}}
+            items(data.nodes.filter{it.groupId==g.id},key={"member${it.id}"}){n->UiCard{UiRow(n.name,translateTitle=false,modifier=Modifier.testTag("merge_node_${n.id}"),onClick={nodes=if(n.id in nodes)nodes-n.id else nodes+n.id},trailing={Checkbox(n.id in nodes,{nodes=if(it)nodes+n.id else nodes-n.id})})}}
+        }
+    }
+    if(choose)GroupedChainPicker("默认节点",data,{choose=false},{selected=if(it=="auto")0 else it.substringAfter(':').toLong()},allowGroup=false,extras=listOf("auto" to uiText("自动选择")),allowedNodes=data.nodes.filter{it.id in nodes || it.groupId in groups}.map{it.id}.toSet())
+}
+
+@Composable internal fun NodeInfo(node:Node,data:AppData,vm:AppViewModel,onDismiss:()->Unit) {
+    val testing by vm.service.testingNodes.collectAsStateWithLifecycle()
+    val current=data.nodes.firstOrNull { it.id==node.id } ?: node
+    val o=JSONObject(current.outbound)
+    UiAlertDialog(onDismissRequest=onDismiss,title={Text(uiText("节点详情"))},text={
+        androidx.compose.foundation.lazy.LazyColumn(Modifier.heightIn(max=420.dp).testTag("node_info_list")) {
+            items(listOf("名称" to current.name,"协议" to o.optString("type"),"地址" to o.optString("server"),"端口" to o.optInt("server_port").takeIf{it>0}?.toString().orEmpty(),"分组" to (data.groups.firstOrNull{it.id==current.groupId}?.name ?:""),"最近测试" to if(node.id in testing)"测试中" else nodeTestLabel(current))){(key,value)->UiRow(key,if(key=="最近测试")uiText(value)else value,translateSubtitle=false)}
+        }
+    },confirmButton={TextButton(onClick=onDismiss){Text(uiText("关闭"))}},dismissButton={TextButton(onClick={vm.service.testNodes(listOf(node.id))},enabled=data.groups.any{it.id==node.groupId && it.enabled}){Text(uiText("测试延迟"))}})
+}

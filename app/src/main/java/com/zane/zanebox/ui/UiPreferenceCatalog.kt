@@ -1,0 +1,176 @@
+package com.zane.zanebox.ui
+
+import com.zane.zanebox.data.AppData
+import com.zane.zanebox.data.SettingDefaults
+import com.zane.zanebox.R
+
+internal data class Preference(
+    val key:String,
+    val title:String,
+    val default:String=SettingDefaults.value(key),
+    val choices:List<Pair<String,String>> = emptyList(),
+    val boolean:Boolean=false,
+    val availability:String="",
+)
+internal fun boolean(key:String,title:String,default:Boolean=SettingDefaults.value(key,"false").toBoolean())=Preference(key,title,default.toString(),boolean=true)
+internal fun choice(key:String,title:String,default:String,vararg values:Pair<String,String>)=Preference(key,title,default,values.toList())
+internal val uiSkinChoices=listOf("prism" to "棱镜流光","linear" to "简洁留白","claude" to "暖纸陶色","supabase" to "深色翡翠","miro" to "明黄工作台")
+// Retired skins render as the retained original UI without rewriting imported settings.
+internal fun resolvedUiSkin(value:String)=value.lowercase(java.util.Locale.ROOT).takeIf { id->uiSkinChoices.any {it.first==id} } ?: "prism"
+internal val strategies=listOf("" to "自动","prefer_ipv4" to "优先 IPv4","prefer_ipv6" to "优先 IPv6","ipv4_only" to "仅 IPv4","ipv6_only" to "仅 IPv6")
+private val ipv6Modes=listOf("ipv4_only" to "仅 IPv4","prefer_ipv4" to "优先 IPv4","prefer_ipv6" to "优先 IPv6","ipv6_only" to "仅 IPv6")
+private val languages=uiLanguageChoices
+private val rulesProviders=listOf("0" to "官方","1" to "Loyalsoldier","2" to "Chocolate4U / Iran","3" to "L11R / Antizapret","4" to "自定义")
+private val urlTestIntervals=listOf("1m" to "1 分钟","5m" to "5 分钟","10m" to "10 分钟","30m" to "30 分钟")
+private val urlTestTolerances=listOf("5" to "5 ms","10" to "10 ms","30" to "30 ms","50" to "50 ms")
+
+internal fun preferenceSections(data:AppData)=listOf(
+    "软件设置" to listOf(
+        boolean("autoStart","开机自动连接"),
+        choice("uiSkin","界面皮肤",SettingDefaults.value("uiSkin"),*uiSkinChoices.toTypedArray()),
+        choice("appLanguage","应用语言",SettingDefaults.value("appLanguage"),*languages.toTypedArray()),
+        choice("serviceMode","服务模式",SettingDefaults.value("serviceMode"),"vpn" to "VPN","proxy" to "本地代理"),
+        choice("proxyCore","代理内核",SettingDefaults.value("proxyCore"),"sing-box" to "sing-box","xray" to "Xray（试验）","mihomo" to "mihomo（试验）"),
+        choice("tunStack","TUN 实现",SettingDefaults.value("tunStack"),"mixed" to "混合","system" to "系统","gvisor" to "gVisor"),
+        Preference("mtu","MTU",SettingDefaults.value("mtu")),
+        Preference("speedInterval","速度通知更新间隔",SettingDefaults.value("speedInterval"),availability="前台 1s，后台或息屏 10s"),
+        boolean("statsEnabled","流量统计"),
+        boolean("showDirectSpeed","显示直连速度"),
+        boolean("showGroupInNotification","在通知中显示组名"),
+        boolean("confirmProfileDelete","删除配置文件确认"),
+        boolean("alwaysShowAddress","始终显示地址"),
+        boolean("meteredNetwork","计量网络"),
+        boolean("acquireWakeLock","保持 CPU 唤醒"),
+        boolean("hideFromRecentApps","从最近任务隐藏"),
+        choice("logLevel","日志级别",SettingDefaults.value("logLevel"),*listOf("trace","debug","info","warn","error","fatal","panic").map{it to it}.toTypedArray()),
+        Preference("globalCustomConfig","自定义全局配置"),
+    ),
+    "路由设置" to listOf(
+        choice("routeMode","路由模式",SettingDefaults.value("routeMode"),"rule" to "规则","global" to "全局","direct" to "直连"),
+        Preference("perAppEnabled","分应用代理",SettingDefaults.value("perAppEnabled")),
+        boolean("bypassLan","绕过局域网"),
+        boolean("bypassLanInCore","在内核中绕过局域网"),
+        boolean("concurrentDial","并发拨号"),
+        boolean("sniff","流量嗅探"),
+        boolean("resolveDestination","解析目标地址"),
+        choice("ipv6Mode","IPv6 路由",SettingDefaults.value("ipv6Mode"),*ipv6Modes.toTypedArray()),
+        choice("rulesProvider","路由资源更新源",SettingDefaults.value("rulesProvider"),*rulesProviders.toTypedArray()),
+        Preference("rulesGeositeUrl","GeoSite URL",SettingDefaults.value("rulesGeositeUrl")),
+        Preference("rulesGeoipUrl","GeoIP URL",SettingDefaults.value("rulesGeoipUrl")),
+        choice("rulesUpdateInterval","规则集更新间隔",SettingDefaults.value("rulesUpdateInterval"),"off" to "关闭","6h" to "6 小时","12h" to "12 小时","24h" to "24 小时","3d" to "3 天","7d" to "7 天"),
+        choice("urlTestInterval","URLTest 间隔",SettingDefaults.value("urlTestInterval"),*urlTestIntervals.toTypedArray()),
+        choice("urlTestTolerance","URLTest 切换容差",SettingDefaults.value("urlTestTolerance"),*urlTestTolerances.toTypedArray()),
+    ),
+    "分片设置" to listOf(
+        boolean("enableTLSFragment","启用 TLS Client Hello 分片"),
+        Preference("fragmentLength","分片长度（最小–最大）",SettingDefaults.value("fragmentLength"),availability="旧长度/间隔参数不受当前内核支持"),
+        Preference("fragmentInterval","分片间隔（最小–最大）",SettingDefaults.value("fragmentInterval"),availability="旧长度/间隔参数不受当前内核支持"),
+    ),
+    "DNS 设置" to listOf(
+        Preference("dnsRemote","远程 DNS",SettingDefaults.value("dnsRemote")),
+        Preference("dnsStrategyRemote","远程 DNS 策略",SettingDefaults.value("dnsStrategyRemote"),strategies),
+        Preference("dnsDirect","直连 DNS",SettingDefaults.value("dnsDirect")),
+        Preference("dnsStrategyDirect","直连 DNS 策略",SettingDefaults.value("dnsStrategyDirect"),strategies),
+        Preference("dnsStrategyServer","服务器地址解析策略",SettingDefaults.value("dnsStrategyServer"),strategies),
+        boolean("enableDnsRouting","启用 DNS 路由"),
+        boolean("fakeDns","启用 Fake DNS"),
+        Preference("dnsHosts","Hosts"),
+    ),
+    "代理共享" to listOf(
+        boolean("allowLan","允许局域网访问"),
+        boolean("shareEnabled","代理分享"),
+        Preference("sharePort","共享端口",SettingDefaults.value("sharePort")),
+    ),
+    "入站设置" to listOf(
+        boolean("disableMixedInbound","VPN 模式关闭本地 mixed 入口"),
+        boolean("appendHttpProxy","追加 HTTP 代理至 VPN"),
+        Preference("httpProxyBypass","HTTP 代理绕过列表"),
+        Preference("mixedPort","本地代理端口",SettingDefaults.value("mixedPort")),
+        boolean("strictRoute","严格路由"),
+    ),
+    "连接复用" to listOf(
+        boolean("muxEnabled","启用 Mux"),
+        choice("muxProtocol","Mux 协议",SettingDefaults.value("muxProtocol"),"h2mux" to "h2mux","smux" to "smux","yamux" to "yamux"),
+        Preference("muxMaxStreams","Mux 最大流数",SettingDefaults.value("muxMaxStreams")),
+        boolean("muxPadding","Mux 填充"),
+    ),
+    "其他设置" to listOf(
+        Preference("testUrl","测速链接",SettingDefaults.value("testUrl")),
+        boolean("unifiedDelay","统一延迟"),
+        boolean("autoTestSelectedNode","选择节点后自动更新延迟"),
+        boolean("tcpConcurrent","TCP 并发"),
+        Preference("testTimeout","连接测试超时（毫秒）",SettingDefaults.value("testTimeout")),
+        Preference("testConcurrency","连接测试并发",SettingDefaults.value("testConcurrency")),
+        boolean("clashApi","启用 Clash API"),
+        Preference("apiPort","API 端口",SettingDefaults.value("apiPort")),
+        boolean("networkReset","网络变化时重置连接"),
+        boolean("wakeResetConnections","唤醒时重置连接"),
+        boolean("globalAllowInsecure","全局允许不安全 TLS"),
+        boolean("allowInsecureOnRequest","更新订阅时允许不安全 TLS"),
+        choice("appTLSVersion","订阅最低 TLS 版本",SettingDefaults.value("appTLSVersion"),"1.2" to "TLS 1.2","1.3" to "TLS 1.3"),
+        boolean("showBottomBar","显示底栏"),
+    ),
+)
+
+internal data class PreferenceAppearance(val title:String,val summary:String,val icon:Int)
+internal val preferenceAppearance=mapOf(
+    "autoStart" to PreferenceAppearance("自动连接","此前已连接时，在手机启动或更新后自动恢复连接",R.drawable.zb_ref_ic_communication_phonelink_ring),
+    "uiSkin" to PreferenceAppearance("界面皮肤","",R.drawable.zb_ref_ic_baseline_color_lens_24),
+    "theme" to PreferenceAppearance("夜间模式","",R.drawable.zb_ref_ic_baseline_wb_sunny_24),
+    "appLanguage" to PreferenceAppearance("语言","",R.drawable.zb_ref_baseline_translate_24),
+    "serviceMode" to PreferenceAppearance("运行模式","",R.drawable.zb_ref_ic_device_developer_mode),
+    "proxyCore" to PreferenceAppearance("代理内核","选择 sing-box、Xray 或 mihomo 转发引擎",R.drawable.zb_ref_baseline_developer_board_24),
+    "tunStack" to PreferenceAppearance("TUN 实现","",R.drawable.zb_ref_ic_baseline_flip_camera_android_24),
+    "mtu" to PreferenceAppearance("MTU","",R.drawable.zb_ref_baseline_public_24),
+    "speedInterval" to PreferenceAppearance("速度通知更新间隔","",R.drawable.zb_ref_ic_baseline_shutter_speed_24),
+    "statsEnabled" to PreferenceAppearance("配置流量统计","禁用后将不统计使用的流量",0),
+    "showDirectSpeed" to PreferenceAppearance("显示直连速度","在通知中也显示不经过代理的流量速度",R.drawable.zb_ref_ic_baseline_speed_24),
+    "showGroupInNotification" to PreferenceAppearance("在通知中显示组名","",0),
+    "confirmProfileDelete" to PreferenceAppearance("删除配置文件确认","",0),
+    "alwaysShowAddress" to PreferenceAppearance("始终显示地址","始终在配置卡片上显示服务器地址",R.drawable.zb_ref_ic_baseline_center_focus_weak_24),
+    "meteredNetwork" to PreferenceAppearance("按流量计费","让系统认为此 VPN 按流量计费",R.drawable.zb_ref_ic_device_data_usage),
+    "acquireWakeLock" to PreferenceAppearance("获取唤醒锁","保持 CPU 开启",R.drawable.zb_ref_baseline_developer_board_24),
+    "hideFromRecentApps" to PreferenceAppearance("从最近任务中隐藏","应用在后台运行时，在最近任务中隐藏",0),
+    "logLevel" to PreferenceAppearance("日志级别","",R.drawable.zb_ref_ic_baseline_bug_report_24),
+    "globalCustomConfig" to PreferenceAppearance("自定义配置","",R.drawable.zb_ref_ic_baseline_layers_24),
+    "perAppEnabled" to PreferenceAppearance("分应用代理","代理被勾选应用的流量",R.drawable.zb_ref_ic_navigation_apps),
+    "bypassLan" to PreferenceAppearance("绕过局域网地址","",R.drawable.zb_ref_ic_baseline_legend_toggle_24),
+    "bypassLanInCore" to PreferenceAppearance("在核心中绕过 LAN","",0),
+    "concurrentDial" to PreferenceAppearance("并发拨号","启用并发连接以更快地建立网络，可能会增加电池使用量",R.drawable.zb_ref_ic_baseline_compare_arrows_24),
+    "sniff" to PreferenceAppearance("启用流量探测","",R.drawable.zb_ref_ic_baseline_manage_search_24),
+    "resolveDestination" to PreferenceAppearance("解析目标地址","如果目标地址是一个域, 则根据 IPv6 策略传出（与 FakeDNS 冲突）",R.drawable.zb_ref_baseline_wrap_text_24),
+    "ipv6Mode" to PreferenceAppearance("IPv6 路由","",R.drawable.zb_ref_ic_image_looks_6),
+    "rulesProvider" to PreferenceAppearance("路由资源更新源","",R.drawable.zb_ref_ic_baseline_rule_folder_24),
+    "rulesGeositeUrl" to PreferenceAppearance("geosite URL","",0),
+    "rulesGeoipUrl" to PreferenceAppearance("geoip URL","",0),
+    "rulesUpdateInterval" to PreferenceAppearance("RuleSet 更新间隔","",R.drawable.zb_ref_ic_baseline_shutter_speed_24),
+    "urlTestInterval" to PreferenceAppearance("URLTest 间隔","",0),
+    "urlTestTolerance" to PreferenceAppearance("URLTest 切换容差","",0),
+    "enableTLSFragment" to PreferenceAppearance("启用TLS Client Hello分片","",0),
+    "fragmentLength" to PreferenceAppearance("分片包长（最小-最大）","",0),
+    "fragmentInterval" to PreferenceAppearance("分片间隔（最小-最大）","",0),
+    "dnsRemote" to PreferenceAppearance("远程 DNS","",R.drawable.zb_ref_ic_action_dns),
+    "dnsStrategyRemote" to PreferenceAppearance("域名策略（远程）","",0),
+    "dnsDirect" to PreferenceAppearance("直连 DNS","",R.drawable.zb_ref_ic_action_dns),
+    "dnsStrategyDirect" to PreferenceAppearance("域名策略（直连）","",0),
+    "dnsStrategyServer" to PreferenceAppearance("域名策略（服务器地址）","",0),
+    "enableDnsRouting" to PreferenceAppearance("启用 DNS 路由","使用直连 DNS 解析绕过路由中的 domains. 注意潜在的 DNS 泄漏",R.drawable.zb_ref_ic_baseline_camera_24),
+    "fakeDns" to PreferenceAppearance("启用 FakeDNS","可能导致其他应用程序在代理停止后需要重新启动以重新连接到网络",R.drawable.zb_ref_ic_action_lock),
+    "dnsHosts" to PreferenceAppearance("域名重写","",R.drawable.zb_ref_ic_baseline_transform_24),
+    "allowLan" to PreferenceAppearance("局域网共享","",R.drawable.zb_ref_ic_baseline_nat_24),
+    "disableMixedInbound" to PreferenceAppearance("禁用混合入站","仅保留 TUN 入站，不监听本地 HTTP/SOCKS 代理端口",0),
+    "appendHttpProxy" to PreferenceAppearance("追加 HTTP 代理至 VPN","浏览器 / 一些支持的应用 将直接使用 HTTP 代理, 而不经过虚拟网卡设备 (Android 10+)",0),
+    "httpProxyBypass" to PreferenceAppearance("HTTP 代理绕过列表","",R.drawable.zb_ref_ic_baseline_domain_24),
+    "strictRoute" to PreferenceAppearance("严格路由","",0),
+    "testUrl" to PreferenceAppearance("测速链接","",R.drawable.zb_ref_ic_baseline_cast_connected_24),
+    "unifiedDelay" to PreferenceAppearance("统一延迟","复用已建立的连接测量延迟，减少首次握手的影响",0),
+    "autoTestSelectedNode" to PreferenceAppearance("选择节点后自动更新延迟","选择节点后按统一延迟设置更新该节点延迟，保持列表顺序",0),
+    "tcpConcurrent" to PreferenceAppearance("TCP 并发","同时尝试域名的多个 IP，使用先成功的连接",0),
+    "clashApi" to PreferenceAppearance("启用 Clash API","在 127.0.0.1:9090 提供 clash api 和 yacd 仪表板",R.drawable.zb_ref_baseline_construction_24),
+    "networkReset" to PreferenceAppearance("当网络发生变化时重置出站连接","",R.drawable.zb_ref_ic_baseline_flip_camera_android_24),
+    "wakeResetConnections" to PreferenceAppearance("当设备从睡眠状态唤醒时重置出站连接","",0),
+    "globalAllowInsecure" to PreferenceAppearance("总是跳过 TLS 证书验证","",R.drawable.zb_ref_ic_action_lock_open),
+    "allowInsecureOnRequest" to PreferenceAppearance("更新订阅的时候允许不安全的连接","",0),
+    "appTLSVersion" to PreferenceAppearance("订阅最低 TLS 版本","",0),
+    "showBottomBar" to PreferenceAppearance("像 SagerNet 一样显示底栏","",0)
+)

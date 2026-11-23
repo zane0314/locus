@@ -1,0 +1,36 @@
+# Build outputs (keep the packaged debug APK via force-add)
+build/
+.build/
+app/build/
+tests/probe/build/
+.gradle/
+tests/__pycache__/
+rust/locus_core/target/
+app/src/main/jniLibs/arm64-v8a/liblocus_core.so
+native/OwnBoxForAndroid/libcore/.build/
+
+# Local SDK paths
+local.properties
+
+# Large toolchains
+.toolchains/
+
+# Internal handoff / acceptance evidence
+.ai/
+reports/
+
+# Upstream test fixtures containing private-key material (kept local only)
+native/sing-box/test/reality_test.go
+native/sing-box/test/brutal_test.go
+native/sing-box/test/ktls_test.go
+native/sing-box/test/config/wireguard.conf
+
+# IDE
+.idea/
+*.iml
+.DS_Store
+
+# Links signing secrets must never be committed
+*.jks
+*.keystore
+**/signing.properties

@@ -1,0 +1,417 @@
+package com.zane.zanebox.ui
+
+import android.app.Application
+import android.net.Uri
+import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.viewModelScope
+import com.zane.zanebox.data.*
+import com.zane.zanebox.config.reorderSmartPolicies
+import com.zane.zanebox.config.ChainTargets
+import com.zane.zanebox.config.createDerivedChainNode
+import com.zane.zanebox.config.createDerivedChainGroup
+import com.zane.zanebox.config.derivedGroupSourceId
+import com.zane.zanebox.config.derivedNodeSourceId
+import com.zane.zanebox.config.withChainTargets
+import com.zane.zanebox.config.syncDerivedChains
+import com.zane.zanebox.runtime.ServiceClient
+import com.zane.zanebox.subscription.SubscriptionParser
+import com.zane.zanebox.subscription.ParseReport
+import com.zane.zanebox.subscription.SubscriptionClient
+import com.zane.zanebox.subscription.SubscriptionUpdater
+import com.zane.zanebox.subscription.SubscriptionOptions
+import com.zane.zanebox.subscription.SubscriptionScheduler
+import com.zane.zanebox.subscription.update
+import com.zane.zanebox.backup.BackupManager
+import com.zane.zanebox.backup.WebDavClient
+import com.zane.zanebox.backup.WebDavEntry
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+
+class AppViewModel(app: Application) : AndroidViewModel(app) {
+    val store = ZaneStore(app,autoLoad=false)
+    private val initialized=kotlinx.coroutines.CompletableDeferred<Unit>()
+    val service = ServiceClient(app)
+    val data = store.data
+    val message = MutableStateFlow("")
+    val busy = MutableStateFlow(true)
+    private var taskCount=0
+    private val reloadRequests=kotlinx.coroutines.channels.Channel<Unit>(kotlinx.coroutines.channels.Channel.CONFLATED)
+    private var applyJob:kotlinx.coroutines.Job?=null
+    private val uiSkinLock=Mutex()
+    private val uiSkinChoice=java.util.concurrent.atomic.AtomicLong()
+    internal val pendingUiSkin=MutableStateFlow<String?>(null)
+    val ip get() = service.exitIp
+    val webdavEntries=MutableStateFlow<List<WebDavEntry>>(emptyList())
+    init {
+        viewModelScope.launch {
+            try {
+                withContext(Dispatchers.IO) {
+                    store.reload()
+                    if(store.snapshot().setting("factoryRouteDefaultsVersion")!="1")store.update{com.zane.zanebox.config.withFactoryRouteDefaults(it,java.util.Locale.getDefault().country)}
+                }
+                initialized.complete(Unit);service.connect()
+            } catch(e:Exception) {initialized.completeExceptionally(e);message.value=e.message ?: "数据库加载失败"}
+            finally {busy.value=false}
+        }
+        viewModelScope.launch {
+            initialized.await()
+            receiveStoreRefreshes(reloadRequests) {
+                try { withContext(Dispatchers.IO) { store.reload() } }
+                catch(e:kotlinx.coroutines.CancellationException) { throw e }
+                catch(e:Exception) { message.value=e.message ?: "数据库加载失败" }
+            }
+        }
+        viewModelScope.launch { SubscriptionScheduler.updates.collect { reloadRequests.trySend(Unit) } }
+        viewModelScope.launch { data.map { value -> value.groups.map { group -> listOf(group.id,group.enabled,group.subscriptionUrl,group.updatedAt,SubscriptionOptions.signature(group.options)) } }.distinctUntilChanged().drop(1).collect { withContext(Dispatchers.IO) { SubscriptionScheduler.reconcile(getApplication(),store.snapshot()) } } }
+        viewModelScope.launch { service.events.collect { message.value = it;reloadRequests.trySend(Unit) } }
+        viewModelScope.launch { service.testResults.collect { reloadRequests.trySend(Unit) } }
+    }
+    fun task(onError:(String)->Unit={},block: suspend () -> Unit) { viewModelScope.launch {
+        taskCount++; busy.value = true
+        try { initialized.await();withContext(Dispatchers.IO) { block() } } catch(e: kotlinx.coroutines.CancellationException) { throw e } catch(e: Exception) { val error=e.message ?: "操作失败";message.value=error;onError(error) }
+        finally { taskCount--; busy.value = taskCount>0 }
+    } }
+    private suspend fun saved(prefix:String="已保存",autoApply:Boolean=true) {
+        withContext(Dispatchers.Main) {
+            if(service.snapshot.value.state==0 || service.snapshot.value.state==4)message.value=prefix
+            else if(!autoApply)message.value="$prefix，请手动应用修改使配置生效"
+            else {
+                message.value="$prefix，正在自动应用"
+                applyJob?.cancel()
+                applyJob=viewModelScope.launch {kotlinx.coroutines.delay(350);service.autoReload()}
+            }
+        }
+    }
+    fun edit(onSaved:()->Unit={},onError:(String)->Unit={},autoApply:Boolean=true,block: (AppData) -> AppData) = task(onError) {
+        store.update { block(it).withEnabledSelection() }
+        saved(autoApply=autoApply)
+        withContext(Dispatchers.Main){onSaved()}
+    }
+    fun setting(key: String, value: String) {
+        if(key=="uiSkin") {
+            val choice=uiSkinChoice.incrementAndGet()
+            val skin=resolvedUiSkin(value)
+            pendingUiSkin.value=skin
+            task(onError={if(choice==uiSkinChoice.get())pendingUiSkin.value=null}) {
+                // Keep the generation check and the small kv write together, away from PackageManager.
+                synchronized(store) {
+                    if(choice!=uiSkinChoice.get())return@task
+                    store.putSetting("uiSkin",skin)
+                }
+                service.refreshNotification()
+                syncUiSkin()
+                if(choice==uiSkinChoice.get())message.value="已保存"
+            }
+            return
+        }
+        if(key=="ipv6Mode") { require(value in listOf("ipv4_only","prefer_ipv4","prefer_ipv6","ipv6_only"));edit { it.copy(settings=it.settings+("ipv6Mode" to value)+("ipv6" to (value!="ipv4_only").toString())+("dnsStrategy" to value)) };return }
+        if(settingsApply(key)==SettingsApply.LIVE)task {
+            store.update {data->
+                val group=if(key.startsWith("sort_group_"))key.removePrefix("sort_group_").toLongOrNull() else if(key.startsWith("sort_mode_group_"))key.removePrefix("sort_mode_group_").toLongOrNull() else null
+                val ranks=data.nodes.filter {it.groupId==group}.map {"sort_ping_${it.id}"}.toSet()
+                data.copy(settings=data.settings.filterKeys {it !in ranks}+(key to value))
+            }
+            if(key!="browseGroupId")message.value="已保存"
+            if(key in setOf("networkReset","acquireWakeLock","rulesUpdateInterval","rulesUpdateDelay"))withContext(Dispatchers.Main){service.refreshSettings()}
+        } else edit(onSaved={if(key.startsWith("smartUrl."))service.refreshSettings()},autoApply=settingsApply(key)==SettingsApply.AUTO) { it.copy(settings = it.settings + (key to value)) }
+    }
+    fun reconcileUiSkin()=task {syncUiSkin()}
+    private suspend fun syncUiSkin() {
+        uiSkinLock.withLock {
+            val choice=uiSkinChoice.get()
+            val skin=resolvedUiSkin(store.readSetting("uiSkin",SettingDefaults.value("uiSkin")))
+            service.refreshNotification()
+            val previous=enabledLauncherSkin(getApplication())
+            try {applyLauncherIcon(getApplication(),skin)}
+            catch(e:Exception) {
+                store.update {
+                    if(choice==uiSkinChoice.get() && (pendingUiSkin.value==null || pendingUiSkin.value==skin) && resolvedUiSkin(it.setting("uiSkin"))==skin)
+                        it.copy(settings=it.settings+("uiSkin" to previous)) else it
+                }
+                service.refreshNotification()
+                withContext(Dispatchers.Main) {if(choice==uiSkinChoice.get())pendingUiSkin.compareAndSet(skin,null)}
+                throw e
+            }
+        }
+    }
+    private fun invalidateUiSkin() {uiSkinChoice.incrementAndGet();pendingUiSkin.value=null}
+    fun resetSettings() {invalidateUiSkin();edit { it.copy(settings=emptyMap()) }}
+    fun reorderNodes(ids:List<Long>)=task {store.update{it.reorderNodes(ids)};message.value="节点顺序已保存"}
+    fun reorderGroups(ids:List<Long>)=task {store.update{it.reorderGroups(ids)};message.value="分组顺序已保存"}
+    fun reorderRules(front:Boolean,ids:List<Long>)=edit{it.reorderRules(front,ids)}
+    fun createChainNode(source:Node,name:String,targets:ChainTargets,onSaved:()->Unit={},onError:(String)->Unit={})=task(onError) {
+        val before=store.snapshot()
+        val candidate=before.createDerivedChainNode(source.id,name,targets)
+        val created=candidate.nodes.first { n->before.nodes.none { it.id==n.id } }
+        service.checkConfig(com.zane.zanebox.config.ConfigBuilder.build(candidate,com.zane.zanebox.config.Purpose.TEST,created.id))
+        store.update { it.createDerivedChainNode(source.id,name,targets,allocateId=store::nextId) }
+        saved("链式节点已创建")
+        withContext(Dispatchers.Main){onSaved()}
+    }
+    fun createChainGroup(source:Group,name:String,targets:ChainTargets,onSaved:()->Unit={},onError:(String)->Unit={})=task(onError) {
+        val before=store.snapshot()
+        val candidate=before.createDerivedChainGroup(source.id,name,targets)
+        service.checkConfig(com.zane.zanebox.config.ConfigBuilder.build(candidate))
+        store.update { it.createDerivedChainGroup(source.id,name,targets,allocateId=store::nextId) }
+        saved("链式分组已创建，随源分组更新")
+        withContext(Dispatchers.Main){onSaved()}
+    }
+    fun saveNode(node:Node,onSaved:()->Unit={},onError:(String)->Unit={})=task(onError) {
+        val before=store.snapshot()
+        val previousNode=before.nodes.firstOrNull { it.id==node.id }
+        if(previousNode!=null && derivedNodeSourceId(previousNode)>0 && before.groups.firstOrNull { it.id==previousNode.groupId }?.let(::derivedGroupSourceId)?.let { it>0 }==true)
+            require(node.outbound==previousNode.outbound) { "自动成员来源由源分组管理，请新建链式节点以更换来源" }
+        val freshChain=node.id<=0 && org.json.JSONObject(node.outbound).optString("type")=="chain"
+        val container=if(freshChain)before.groups.firstOrNull { it.enabled && org.json.JSONObject(it.options).optBoolean("chainNodeContainer") }
+            ?: Group(store.nextId(),"链式节点",order=(before.groups.maxOfOrNull { it.order } ?: -1)+1,options="""{"chainNodeContainer":true}""") else null
+        val target=container?.id ?: node.groupId.takeIf { id->before.groups.any { it.id==id } } ?: store.nextId()
+        val prepared=if(freshChain && !org.json.JSONObject(node.metadata).has("chain"))node.withChainTargets(ChainTargets())else node
+        val saved=prepared.copy(id=node.id.takeIf { it>0 } ?: store.nextId(),groupId=target,
+            order=before.nodes.firstOrNull { it.id==node.id }?.order ?: before.nodes.size)
+        val outbound=org.json.JSONObject(saved.outbound)
+        if(outbound.optString("type") in listOf("vless","vmess","tuic","juicity"))require(outbound.optString("uuid").isNotBlank()) { "UUID 不能为空" }
+        if(outbound.optString("type") in listOf("trojan","hysteria2","tuic","juicity","anytls"))require(outbound.optString("password").isNotBlank()) { "密码不能为空" }
+        fun insert(data:AppData)=data.copy(groups=if(data.groups.any { it.id==target })data.groups else data.groups+(container ?: Group(target,"手动节点")),
+            nodes=if(data.nodes.any{it.id==saved.id})data.nodes.map{if(it.id==saved.id)saved else it}else data.nodes+saved).withEnabledSelection()
+        val candidate=insert(before).syncDerivedChains()
+        if(previousNode==null || previousNode.outbound!=saved.outbound || com.zane.zanebox.config.nodeChainTargets(previousNode)!=com.zane.zanebox.config.nodeChainTargets(saved))
+            require(com.zane.zanebox.config.chainUnavailableReason(candidate,saved)==null) { com.zane.zanebox.config.chainUnavailableReason(candidate,saved).orEmpty() }
+        service.checkConfig(com.zane.zanebox.config.ConfigBuilder.build(candidate,com.zane.zanebox.config.Purpose.TEST,saved.id))
+        store.update(::insert)
+        saved("节点已保存")
+        withContext(Dispatchers.Main) { onSaved() }
+    }
+    fun factoryReset() {invalidateUiSkin();task { service.restore(com.zane.zanebox.config.withFactoryRouteDefaults(AppData(),java.util.Locale.getDefault().country));message.value="正在清除应用配置" }}
+    fun clearCache()=task {
+        require(service.snapshot.value.state !in 1..3) { "清除缓存前请先断开连接" }
+        getApplication<Application>().cacheDir.listFiles()?.forEach { require(it.deleteRecursively()) { "缓存清除失败" } }
+        message.value="缓存已清除"
+    }
+    fun importText(text: String, groupId: Long = -1) = task { offerTextNow(text,if(groupId<0) store.snapshot().browseGroupId else groupId) }
+    private fun insertParsed(report: ParseReport, groupId: Long, name:String) {
+        val parsed = report.nodes
+        require(parsed.isNotEmpty()) { "未找到有效节点" }
+        store.update { d ->
+            require(groupId<0 || d.groups.any { it.id==groupId }) { "所选分组已删除，请重新选择" }
+            require(groupId>=0 || name.trim().isNotEmpty()) { "分组名称不能为空" }
+            val target = if(groupId>=0)groupId else store.nextId()
+            d.copy(groups = if(groupId>=0) d.groups else d.groups + Group(target,name.trim()),
+                nodes = d.nodes + parsed.map { Node(store.nextId(),target,it.name,it.outbound,it.shareLink,metadata=it.metadata) }).withEnabledSelection()
+        }
+        message.value = "已导入 ${parsed.size} 个节点" + (if(report.skipped>0) "，跳过 ${report.skipped} 条无法识别的内容" else "") + "，请点击应用修改"
+    }
+    /** All imports are staged and only applied after the user confirms their destination. */
+    val pendingImport = MutableStateFlow<PendingImport?>(null)
+    val importing = MutableStateFlow(false)
+    private var pendingSubscriptionGroup:Group?=null
+    private fun stageImport(pending:PendingImport) {
+        require(!importing.value) { "正在导入，请稍候" }
+        pendingSubscriptionGroup=null
+        pendingImport.value=pending
+    }
+    fun offerLink(value:String) = task {
+        val link=com.zane.zanebox.IncomingLink.parse(value)
+        if(link.subscriptionUrl.isNotBlank())stageImport(PendingImport.Subscription(link.subscriptionUrl,link.name)) else offerTextNow(link.text)
+    }
+    fun offerText(text:String) = task { offerTextNow(text) }
+    private fun offerTextNow(text:String,groupId:Long=store.snapshot().browseGroupId) {
+        val subscription=com.zane.zanebox.IncomingLink.subscription(text)
+        val pending=if(subscription!=null)PendingImport.Subscription(subscription.subscriptionUrl,subscription.name) else {
+            val report=SubscriptionParser.parseReport(text)
+            require(report.nodes.isNotEmpty()) { "未找到有效节点" }
+            PendingImport.Nodes(report,groupId.takeIf { it>0 } ?: -1)
+        }
+        stageImport(pending)
+    }
+    fun offerStream(uri:Uri) = readText(uri)
+    fun cancelImport() { if(!importing.value) { pendingImport.value=null;pendingSubscriptionGroup=null } }
+    fun confirmImport(name:String=(pendingImport.value as? PendingImport.Subscription)?.name ?: "导入节点",groupId:Long=(pendingImport.value as? PendingImport.Nodes)?.preferredGroupId ?: -1) {
+        val pending=pendingImport.value ?: return
+        if(importing.value)return
+        importing.value=true
+        if(pending is PendingImport.Backup)invalidateUiSkin()
+        task {
+            try {
+                when(pending) {
+                    is PendingImport.Subscription -> {
+                        require(name.trim().isNotEmpty()) { "分组名称不能为空" }
+                        val group=pendingSubscriptionGroup?.let { previous ->
+                            store.snapshot().groups.firstOrNull { it.id==previous.id } ?: error("导入分组已删除，请取消后重新导入")
+                        } ?: Group(store.nextId(),name.trim(),pending.url).also { created ->
+                            store.update { it.copy(groups=it.groups+created).withEnabledSelection() }
+                            pendingSubscriptionGroup=created
+                        }
+                        val renamed=store.update { d ->
+                            val current=d.groups.firstOrNull { it.id==group.id } ?: error("导入分组已删除，请取消后重新导入")
+                            require(current.subscriptionUrl==pending.url) { "订阅地址已变更，请取消后重新导入" }
+                            d.copy(groups=d.groups.map { g -> if(g.id==group.id)g.copy(name=name.trim()) else g })
+                        }.groups.first { it.id==group.id }
+                        updateGroupNow(renamed)
+                    }
+                    is PendingImport.Nodes -> insertParsed(pending.report,groupId,name)
+                    is PendingImport.Backup -> { service.restore(pending.data);message.value="备份已验证，正在应用" }
+                }
+                pendingImport.value=null
+                pendingSubscriptionGroup=null
+            } finally { importing.value=false }
+        }
+    }
+    fun updateGroup(group: Group) = task { updateGroupNow(group) }
+    fun updateAllGroups() {
+        val groups=data.value.groups.filter { it.enabled && it.subscriptionUrl.isNotBlank() }
+        if(groups.isEmpty())message.value="没有可更新的订阅" else groups.forEach(::updateGroup)
+    }
+    private suspend fun updateGroupNow(requested:Group) {
+        val group=if(derivedGroupSourceId(requested)>0)store.snapshot().groups.firstOrNull { it.id==derivedGroupSourceId(requested) } ?: error("源分组已删除，链式分组已保留")else requested
+        require(group.subscriptionUrl.isNotBlank()) { "当前分组没有订阅地址" }
+        val context=getApplication<Application>()
+        val options=SubscriptionOptions.parse(group.options)
+        val connected=service.snapshot.value.state==2 || (options.updateWhenConnectedOnly && SubscriptionScheduler.connectionCheck(context))
+        val updated=SubscriptionUpdater.update(store,group,context,connected)
+        SubscriptionScheduler.reconcile(context,store.snapshot())
+        SubscriptionScheduler.apply(context,store,updated,automatic=false)
+        message.value="订阅已更新并完成延迟测试"
+    }
+    fun saveGroup(inputGroup:Group,fetch:Boolean,onSaved:()->Unit={},onError:(String)->Unit={}) = task(onError) {
+        val group=inputGroup.copy(id=inputGroup.id.takeIf {it>0} ?: store.nextId())
+        SubscriptionOptions.parse(group.options)
+        fun insert(d:AppData):AppData {
+            val keys=if(org.json.JSONObject(group.options).has("nodeSortOrder"))setOf("sort_group_${group.id}","sort_mode_group_${group.id}","legacy.preference.anybox_nodes.sort_group_${group.id}")+d.nodes.filter {it.groupId==group.id}.map {"sort_ping_${it.id}"} else emptySet()
+            return d.copy(groups=if(d.groups.any{it.id==group.id})d.groups.map{if(it.id==group.id)group else it}else d.groups+group,settings=d.settings.filterKeys{it !in keys}).withEnabledSelection()
+        }
+        val before=store.snapshot()
+        val previous=before.groups.firstOrNull { it.id==group.id }
+        if(previous?.let { com.zane.zanebox.config.groupChainTargets(it) }!=com.zane.zanebox.config.groupChainTargets(group)) {
+            val candidate=insert(before)
+            candidate.nodes.filter { it.groupId==group.id }.forEach { member->require(com.zane.zanebox.config.chainUnavailableReason(candidate,member)==null) { com.zane.zanebox.config.chainUnavailableReason(candidate,member).orEmpty() } }
+            if(candidate.nodes.any { n->candidate.groups.any { it.id==n.groupId && it.enabled } })
+                service.checkConfig(com.zane.zanebox.config.ConfigBuilder.build(candidate))
+        }
+        store.update(::insert)
+        saved("组已保存")
+        withContext(Dispatchers.Main){onSaved()}
+        if(fetch && group.subscriptionUrl.isNotBlank())updateGroupNow(group)
+    }
+    private fun dav():WebDavClient { val d=store.snapshot();return WebDavClient(d.setting("webdavUrl"),d.setting("webdavUser"),d.setting("webdavPassword")) }
+    fun listWebdav() = task { webdavEntries.value=dav().list();message.value="WebDAV 连接成功：${webdavEntries.value.size} 个备份" }
+    fun uploadWebdav() = task { dav().upload(BackupManager(getApplication()).export(store.snapshot()));webdavEntries.value=dav().list();message.value="云备份已上传" }
+    fun restoreWebdav(entry:WebDavEntry) {invalidateUiSkin();task { service.restore(BackupManager(getApplication()).`import`(dav().download(entry)));message.value="云备份已验证，正在应用" }}
+    fun deleteWebdav(entry:WebDavEntry) = task { dav().delete(entry);webdavEntries.value=dav().list();message.value="云备份已删除" }
+    fun updateAllSmartRules() {
+        val keys=data.value.settings.filterKeys { it.startsWith("smartUrl.") }.filterValues { it.isNotBlank() }.keys
+        if(keys.isEmpty())message.value="没有配置远程规则源" else keys.forEach { updateSmart(it.substringAfter('.')) }
+    }
+    private fun stageAsset(kind:String,bytes:ByteArray) {
+        com.zane.zanebox.config.geoAssetCode(kind,bytes)
+        val name="asset-${java.util.UUID.randomUUID()}-$kind.db"
+        val file=android.util.AtomicFile(java.io.File(getApplication<Application>().noBackupFilesDir,name))
+        val output=file.startWrite();try { output.write(bytes);file.finishWrite(output) } catch(e:Exception) { file.failWrite(output);throw e }
+        service.installAsset(name)
+    }
+    fun downloadAsset(kind:String)=task {
+        val data=store.snapshot()
+        val runtime=service.readSnapshot()
+        val proxy=if(runtime.state==2 && runtime.mixedPort>0)java.net.Proxy(java.net.Proxy.Type.HTTP,java.net.InetSocketAddress(runtime.mixedHost,runtime.mixedPort))else null
+        val url=com.zane.zanebox.config.routeAssetUrl(kind,data,proxy)
+        stageAsset(kind,SubscriptionClient.fetchBytes(url,settings=data.settings,proxy=proxy));message.value="资源已下载，正在校验并应用"
+    }
+    fun importAsset(kind:String,uri:Uri)=task {
+        val bytes=readImportBytes { getApplication<Application>().contentResolver.openInputStream(uri) }
+        stageAsset(kind,bytes);message.value="资源已导入，正在校验并应用"
+    }
+    fun updateSmart(key:String) = task { val d=store.snapshot(); val content=SubscriptionClient.fetchSmartRules(d.setting("smartUrl.$key"),d.settings);store.update { com.zane.zanebox.config.applySmartRuleUpdate(it,key,d,content) };message.value="分流列表已更新，请点击应用修改" }
+    fun reorderSmartPolicies(keys:List<String>)=edit { it.reorderSmartPolicies(keys) }
+    fun selectSmartTarget(key:String,value:String)=edit { d ->
+        com.zane.zanebox.config.withBuiltinSmartRules(d.copy(settings=d.settings+("smart.$key.target" to value))) { path ->
+            getApplication<Application>().assets.open(path).bufferedReader().use { it.readText() }
+        }
+    }
+
+    fun deleteNode(id:Long)=deleteNodes(setOf(id))
+    fun deleteNodes(ids:Set<Long>)=edit { removeNodes(it,ids) }
+    fun clearGroup(id:Long)=edit { d->removeNodes(d,d.nodes.filter{it.groupId==id}.map{it.id}.toSet()) }
+    private fun removeNodes(d:AppData,ids:Set<Long>,allowGenerated:Boolean=false):AppData {
+        if(!allowGenerated)require(d.nodes.none { it.id in ids && derivedNodeSourceId(it)>0 && d.groups.firstOrNull { group->group.id==it.groupId }?.let(::derivedGroupSourceId)?.let { sourceId->sourceId>0 }==true }) { "自动成员随源分组管理，请删除整个链式分组" }
+        val removed=com.zane.zanebox.subscription.nodeRemovalIds(d.nodes,ids)
+        val remaining=d.nodes.filter{it.id !in removed}
+        return d.copy(nodes=remaining,
+            settings=cleanSmartTargets((if(d.selectedNodeId in removed)d.settings+("selectedNodeId" to "0")else d.settings).filterKeys { key -> removed.none { key=="nodeRegion.$it" } },removed.map{"node:$it"}.toSet()),
+            rules=d.rules.map{if(it.outbound.startsWith("node:") && it.outbound.substringAfter(':').toLongOrNull() in removed)it.copy(outbound="proxy")else it},
+            merges=d.merges.map{it.copy(nodeIds=it.nodeIds.filter{n->n !in removed},selectedId=if(it.selectedId in removed)0 else it.selectedId)}).withoutStaleNodeSettings().withEnabledSelection()
+    }
+    fun deleteGroup(id:Long) = edit { d ->
+        val cleaned=removeNodes(d,d.nodes.filter { it.groupId==id }.map { it.id }.toSet(),allowGenerated=true)
+        cleaned.copy(groups=cleaned.groups.filter{it.id!=id},
+            settings=cleanSmartTargets(cleaned.settings,setOf("group:$id"))+("browseGroupId" to if(d.browseGroupId==id)"0" else d.browseGroupId.toString())+("smartSourceGroupId" to if(d.setting("smartSourceGroupId")==id.toString())"0" else d.setting("smartSourceGroupId","0"))+("selectedGroupId" to if(cleaned.selectedGroupId==id)"0" else cleaned.selectedGroupId.toString()),
+            rules=cleaned.rules.map { if(it.outbound=="group:$id")it.copy(outbound="proxy")else it },
+            merges=cleaned.merges.map { it.copy(groupIds=it.groupIds-id) }).withoutStaleNodeSettings()
+    }
+    fun deleteMerge(id:Long) = edit { d -> d.copy(settings=cleanSmartTargets(d.settings,setOf("merge:$id"))+("smartSourceMergeId" to if(d.setting("smartSourceMergeId")==id.toString())"0" else d.setting("smartSourceMergeId","0")),merges=d.merges.filter { it.id!=id },rules=d.rules.map { if(it.outbound=="merge:$id")it.copy(outbound="proxy")else it }).withoutStaleNodeSettings() }
+    fun readText(uri: Uri) = task {
+        val bytes=readImportBytes { getApplication<Application>().contentResolver.openInputStream(uri) }
+        if(isZip(bytes)) stageImport(PendingImport.Backup(BackupManager(getApplication()).`import`(bytes))) else offerTextNow(bytes.toString(Charsets.UTF_8))
+    }
+    fun restore(uri: Uri) {invalidateUiSkin();task {
+        val bytes = readImportBytes { getApplication<Application>().contentResolver.openInputStream(uri) }
+        service.restore(BackupManager(getApplication()).`import`(bytes)); message.value = "备份已验证，正在应用"
+    }}
+    fun backup(uri: Uri,scope:com.zane.zanebox.backup.BackupScope=com.zane.zanebox.backup.BackupScope()) = task { val bytes=BackupManager(getApplication()).export(com.zane.zanebox.backup.backupSelection(store.snapshot(),scope));getApplication<Application>().contentResolver.openOutputStream(uri)!!.use { it.write(bytes) }; message.value="备份已保存" }
+    fun shareBackup(scope:com.zane.zanebox.backup.BackupScope)=task {
+        val context=getApplication<Application>();val file=java.io.File(context.cacheDir,"exports/zanebox-backup.zip").also { it.parentFile!!.mkdirs() }
+        file.writeBytes(BackupManager(context).export(com.zane.zanebox.backup.backupSelection(store.snapshot(),scope)))
+        val uri=androidx.core.content.FileProvider.getUriForFile(context,"${context.packageName}.files",file)
+        withContext(Dispatchers.Main) { context.startActivity(android.content.Intent.createChooser(android.content.Intent(android.content.Intent.ACTION_SEND).setType("application/zip").putExtra(android.content.Intent.EXTRA_STREAM,uri).addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION),"分享备份").addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)) }
+    }
+    fun export(uri: Uri,groupId:Long?=null) = task { val d=store.snapshot();val nodes=d.nodes.filter { groupId==null || it.groupId==groupId };require(nodes.isNotEmpty()) { "没有可导出的节点" };getApplication<Application>().contentResolver.openOutputStream(uri)!!.bufferedWriter().use { out -> out.write(shareText(nodes)) }; message.value="节点已导出" }
+    fun saveQr(uri:Uri,bitmap:android.graphics.Bitmap) = task { getApplication<Application>().contentResolver.openOutputStream(uri)!!.use { require(bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG,100,it)) { "保存二维码失败" } };message.value="二维码已保存" }
+    fun shareQr(bitmap:android.graphics.Bitmap) = task {
+        val context=getApplication<Application>();val folder=java.io.File(context.cacheDir,"exports").apply{mkdirs()};val file=java.io.File(folder,"node-qr.png")
+        file.outputStream().use { require(bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG,100,it)) }
+        val uri=androidx.core.content.FileProvider.getUriForFile(context,"${context.packageName}.files",file)
+        withContext(Dispatchers.Main) { context.startActivity(android.content.Intent.createChooser(android.content.Intent(android.content.Intent.ACTION_SEND).setType("image/png").putExtra(android.content.Intent.EXTRA_STREAM,uri).addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION),"分享二维码").addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)) }
+    }
+    fun refreshIp() = service.queryExitIp()
+    private fun isZip(bytes:ByteArray)=bytes.size>4 && bytes[0]==80.toByte() && bytes[1]==75.toByte()
+    override fun onCleared() { service.close(); store.close(); super.onCleared() }
+}
+
+sealed class PendingImport {
+    data class Subscription(val url:String,val name:String):PendingImport()
+    data class Nodes(val report:ParseReport,val preferredGroupId:Long=-1):PendingImport()
+    data class Backup(val data:AppData):PendingImport()
+}
+
+internal fun shareText(nodes:List<Node>):String = if(nodes.all{it.shareLink.isNotBlank()}) nodes.joinToString("\n"){it.shareLink} else org.json.JSONObject().put("outbounds",org.json.JSONArray().apply{nodes.forEach { put(org.json.JSONObject(it.outbound).put("tag",org.json.JSONObject(it.metadata).optString("sourceTag","node-${it.id}").ifBlank{"node-${it.id}"}).put("display_name",it.name)) }}).toString(2)
+
+internal fun subscriptionShareLink(group:Group):String=if(group.subscriptionUrl.isBlank())"" else "sn://subscription?url="+java.net.URLEncoder.encode(group.subscriptionUrl,"UTF-8").replace("+","%20")+"&name="+java.net.URLEncoder.encode(group.name,"UTF-8").replace("+","%20")
+
+private fun mergeMetadata(old:String,fresh:String):String = org.json.JSONObject(old).apply { val incoming=org.json.JSONObject(fresh);incoming.keys().forEach{key->put(key,incoming.get(key))} }.toString()
+
+private fun cleanSmartTargets(settings:Map<String,String>,removed:Set<String>):Map<String,String> = settings.mapValues { (key,value) -> if(key.startsWith("smart.") && key.endsWith(".target") && value in removed) "off" else value }
+
+internal fun AppData.withEnabledSelection(): AppData {
+    val enabledGroups = groups.filter { it.enabled }.sortedBy { it.order }
+    val enabledIds = enabledGroups.map { it.id }.toSet()
+    val current = nodes.firstOrNull { it.id == selectedNodeId && it.groupId in enabledIds }
+    val pinnedDerived=enabledGroups.firstOrNull { it.id==selectedGroupId && derivedGroupSourceId(it)>0 }
+    val selected = current ?: if(pinnedDerived!=null)nodes.filter { it.groupId==pinnedDerived.id }.minByOrNull { it.order }
+        else enabledGroups.firstNotNullOfOrNull { group -> nodes.filter { it.groupId == group.id }.minByOrNull { it.order } }
+    val disabledGroups = groups.filterNot { it.enabled }.map { "group:${it.id}" }.toSet()
+    val disabledNodes = nodes.filter { it.groupId !in enabledIds }.map { "node:${it.id}" }.toSet()
+    var updated = cleanSmartTargets(settings, disabledGroups + disabledNodes)
+    if (current == null) updated = updated + mapOf(
+        "selectedNodeId" to (selected?.id ?: 0L).toString(),
+        "selectedGroupId" to (pinnedDerived?.id ?: selected?.groupId ?: 0L).toString()
+    )
+    return copy(settings = updated)
+}
+
+internal val AppData.browseGroupId: Long get() = setting("browseGroupId", "0").toLongOrNull()?.takeIf { id -> id==0L || groups.any { it.id==id } } ?: 0L

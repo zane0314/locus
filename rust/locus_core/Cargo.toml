@@ -1,0 +1,25 @@
+[package]
+name = "locus_core"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "locus_core"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+base64 = "0.22"
+indexmap = { version = "2", features = ["serde"] }
+jni = "0.21"
+regex = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+serde_yaml = "0.9"
+sha2 = "0.10"
+url = "2"
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "unwind"

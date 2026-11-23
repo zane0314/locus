@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" xmlns:tools="http://schemas.android.com/tools">
+    <uses-permission android:name="android.permission.INTERNET"/>
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
+    <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE"/>
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SYSTEM_EXEMPTED"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE"/>
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
+    <!-- The app picker needs all installed packages for per-app VPN include/exclude rules. -->
+    <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" tools:ignore="QueryAllPackagesPermission"/>
+    <uses-permission android:name="android.permission.WAKE_LOCK"/>
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"/>
+    <application android:name=".ZaneApplication" android:allowBackup="false" android:label="Locus" android:roundIcon="@mipmap/ic_locus_round" android:icon="@mipmap/ic_locus" android:theme="@style/Theme.ZaneBox" android:usesCleartextTraffic="true">
+        <activity android:name=".MainActivity" android:exported="true" android:launchMode="singleTask">
+            <intent-filter><action android:name="android.intent.action.VIEW"/><category android:name="android.intent.category.DEFAULT"/><category android:name="android.intent.category.BROWSABLE"/><data android:scheme="locus"/></intent-filter>
+            <intent-filter><action android:name="android.intent.action.VIEW"/><category android:name="android.intent.category.DEFAULT"/><category android:name="android.intent.category.BROWSABLE"/><data android:scheme="zanebox"/></intent-filter>
+            <intent-filter><action android:name="android.intent.action.VIEW"/><category android:name="android.intent.category.DEFAULT"/><category android:name="android.intent.category.BROWSABLE"/><data android:scheme="sn" android:host="subscription"/></intent-filter>
+            <intent-filter><action android:name="android.intent.action.VIEW"/><category android:name="android.intent.category.DEFAULT"/><category android:name="android.intent.category.BROWSABLE"/><data android:scheme="clash" android:host="install-config"/></intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW"/><category android:name="android.intent.category.DEFAULT"/><category android:name="android.intent.category.BROWSABLE"/>
+                <data android:scheme="ss"/><data android:scheme="vmess"/><data android:scheme="vless"/><data android:scheme="trojan"/><data android:scheme="socks"/><data android:scheme="socks4"/><data android:scheme="socks4a"/><data android:scheme="socks5"/><data android:scheme="hysteria"/><data android:scheme="hysteria2"/><data android:scheme="hy2"/><data android:scheme="tuic"/><data android:scheme="anytls"/><data android:scheme="ssh"/><data android:scheme="juicity"/><data android:scheme="snell"/><data android:scheme="shadowtls"/>
+            </intent-filter>
+            <intent-filter><action android:name="android.intent.action.SEND"/><category android:name="android.intent.category.DEFAULT"/><data android:mimeType="text/plain"/></intent-filter>
+        </activity>
+        <activity android:name=".LauncherActivity" android:exported="false" android:taskAffinity="" android:noHistory="true" android:excludeFromRecents="true"/>
+        <activity-alias android:name=".launcher.LinearAlias" android:enabled="true" android:exported="true" android:icon="@mipmap/ic_locus" android:roundIcon="@mipmap/ic_locus_round" android:label="Locus" android:targetActivity=".LauncherActivity">
+            <intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent-filter>
+        </activity-alias>
+        <activity-alias android:name=".launcher.PrismAlias" android:enabled="false" android:exported="true" android:icon="@mipmap/ic_locus" android:roundIcon="@mipmap/ic_locus_round" android:label="Locus" android:targetActivity=".LauncherActivity">
+            <intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent-filter>
+        </activity-alias>
+        <activity-alias android:name=".launcher.ClaudeAlias" android:enabled="false" android:exported="true" android:icon="@mipmap/links_skin_claude" android:roundIcon="@mipmap/links_skin_claude" android:label="Locus" android:targetActivity=".LauncherActivity">
+            <intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent-filter>
+        </activity-alias>
+        <activity-alias android:name=".launcher.SupabaseAlias" android:enabled="false" android:exported="true" android:icon="@mipmap/links_skin_supabase" android:roundIcon="@mipmap/links_skin_supabase" android:label="Locus" android:targetActivity=".LauncherActivity">
+            <intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent-filter>
+        </activity-alias>
+        <activity-alias android:name=".launcher.MiroAlias" android:enabled="false" android:exported="true" android:icon="@mipmap/links_skin_miro" android:roundIcon="@mipmap/links_skin_miro" android:label="Locus" android:targetActivity=".LauncherActivity">
+            <intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent-filter>
+        </activity-alias>
+        <activity-alias android:name=".launcher.PixelAlias" android:enabled="false" android:exported="true" android:icon="@drawable/zb_launcher_pixel" android:label="Locus" android:targetActivity=".LauncherActivity">
+            <intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent-filter>
+        </activity-alias>
+        <activity-alias android:name=".launcher.NodeNAlias" android:enabled="false" android:exported="true" android:icon="@drawable/zb_launcher_node_n" android:label="Locus" android:targetActivity=".LauncherActivity">
+            <intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent-filter>
+        </activity-alias>
+        <activity-alias android:name=".launcher.ChannelGateAlias" android:enabled="false" android:exported="true" android:icon="@drawable/zb_launcher_channel_gate" android:label="Locus" android:targetActivity=".LauncherActivity">
+            <intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent-filter>
+        </activity-alias>
+        <activity-alias android:name=".launcher.ConfluenceAlias" android:enabled="false" android:exported="true" android:icon="@drawable/zb_launcher_confluence" android:label="Locus" android:targetActivity=".LauncherActivity">
+            <intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent-filter>
+        </activity-alias>
+        <activity-alias android:name=".launcher.LaunchPathAlias" android:enabled="false" android:exported="true" android:icon="@drawable/zb_launcher_launch_path" android:label="Locus" android:targetActivity=".LauncherActivity">
+            <intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent-filter>
+        </activity-alias>
+        <!-- A configured VPN qualifies for systemExempted: developer.android.com/develop/background-work/services/fgs/service-types#system-exempted -->
+        <service tools:ignore="ForegroundServicePermission" android:name=".runtime.ZaneVpnService" android:process=":bg" android:exported="false" android:permission="android.permission.BIND_VPN_SERVICE" android:foregroundServiceType="systemExempted">
+            <intent-filter><action android:name="android.net.VpnService"/></intent-filter>
+        </service>
+        <service android:name=".runtime.ZaneProxyService" android:process=":bg" android:exported="false" android:foregroundServiceType="specialUse"><property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" android:value="proxy"/></service>
+        <service android:name=".core.ExtraCoreMainService" android:process=":extraMain" android:exported="false"/>
+        <service android:name=".core.ExtraCoreTestService" android:process=":extraTest" android:exported="false"/>
+        <service android:name=".runtime.QuickTileService" android:process=":bg" android:exported="true" android:permission="android.permission.BIND_QUICK_SETTINGS_TILE" android:icon="@drawable/ic_locus_notification" android:label="Locus">
+            <intent-filter><action android:name="android.service.quicksettings.action.QS_TILE"/></intent-filter>
+        </service>
+        <receiver android:name=".runtime.StartReceiver" android:process=":bg" android:exported="false">
+            <intent-filter><action android:name="android.intent.action.BOOT_COMPLETED"/><action android:name="android.intent.action.MY_PACKAGE_REPLACED"/></intent-filter>
+        </receiver>
+        <provider android:name="androidx.core.content.FileProvider" android:authorities="${applicationId}.files" android:exported="false" android:grantUriPermissions="true">
+            <meta-data android:name="android.support.FILE_PROVIDER_PATHS" android:resource="@xml/file_paths"/>
+        </provider>
+    </application>
+</manifest>
