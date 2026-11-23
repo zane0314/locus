@@ -154,6 +154,7 @@ pub fn plan_extra_core_with_allocator(
     let mut xray_rules: Vec<Value> = Vec::new();
     let mut ports: Vec<u16> = Vec::new();
     let mut seen_tags: HashSet<String> = HashSet::new();
+    let mut sing_native_count: usize = 0;
 
     for (idx, item) in orig_outbounds.into_iter().enumerate() {
         let obj = item
@@ -172,6 +173,25 @@ pub fn plan_extra_core_with_allocator(
         }
 
         if PASSTHROUGH_OUTBOUNDS.contains(&otype) {
+            new_sing_outbounds.push(item);
+            continue;
+        }
+
+        // Keep custom sing-box Ninja protocol outbounds natively inside sing-box so mixed
+        // Xray/mihomo + Ninja subscriptions and single-node Ninja tests work seamlessly.
+        if otype == "ninja" {
+            let server = obj
+                .get("server")
+                .and_then(Value::as_str)
+                .ok_or_else(|| "Ninja 服务器无效".to_string())?;
+            let port = obj
+                .get("server_port")
+                .and_then(Value::as_i64)
+                .ok_or_else(|| "Ninja 端口无效".to_string())?;
+            if server.trim().is_empty() || !(1..=65535).contains(&port) {
+                return Err("Ninja 节点服务器或端口无效".to_string());
+            }
+            sing_native_count += 1;
             new_sing_outbounds.push(item);
             continue;
         }
@@ -216,6 +236,9 @@ pub fn plan_extra_core_with_allocator(
     }
 
     if extra_outbounds.is_empty() {
+        if sing_native_count > 0 {
+            return Ok(None);
+        }
         return Err("没有外核支持的节点".to_string());
     }
     root_obj.insert("outbounds".into(), Value::Array(new_sing_outbounds));
@@ -964,5 +987,70 @@ mod tests {
         assert_eq!(proxies[1]["type"], "anytls");
         assert_eq!(proxies[1]["client-fingerprint"], "firefox");
         assert_eq!(extra["coreConfig"]["listeners"].as_array().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn preserves_ninja_in_hybrid_and_pure_extra_core_plans() {
+        let hybrid = json!({
+            "links_experimental_core": "xray",
+            "inbounds": [],
+            "outbounds": [
+                {
+                    "type": "vless",
+                    "tag": "node-1",
+                    "server": "1.2.3.4",
+                    "server_port": 443,
+                    "uuid": "11111111-1111-1111-1111-111111111111",
+                    "tls": { "enabled": true, "server_name": "ex.com" }
+                },
+                {
+                    "type": "ninja",
+                    "tag": "node-2",
+                    "server": "ninja.example.com",
+                    "server_port": 443,
+                    "method": "aes-128-gcm",
+                    "password": "user-pw",
+                    "tls": { "enabled": true, "server_name": "ninja.example.com" }
+                },
+                { "type": "direct", "tag": "direct" },
+                { "type": "selector", "tag": "proxy", "outbounds": ["node-1", "node-2"], "default": "node-2" }
+            ],
+            "route": { "rules": [], "final": "proxy", "default_domain_resolver": "dns-direct" },
+            "dns": { "servers": [{ "type": "local", "tag": "dns-direct" }], "rules": [] }
+        });
+        let mut p = 25000u16;
+        let plan = plan_extra_core_with_allocator(&hybrid.to_string(), &mut || {
+            let cur = p;
+            p += 1;
+            Ok(cur)
+        })
+        .unwrap()
+        .unwrap();
+        let sb: Value = serde_json::from_str(&plan.sing_box_config).unwrap();
+        assert_eq!(sb["outbounds"][0]["type"], "socks");
+        assert_eq!(sb["outbounds"][0]["tag"], "node-1");
+        assert_eq!(sb["outbounds"][1]["type"], "ninja");
+        assert_eq!(sb["outbounds"][1]["tag"], "node-2");
+
+        let pure_ninja = json!({
+            "links_experimental_core": "mihomo",
+            "inbounds": [],
+            "outbounds": [
+                {
+                    "type": "ninja",
+                    "tag": "node-2",
+                    "server": "ninja.example.com",
+                    "server_port": 443,
+                    "method": "aes-128-gcm",
+                    "password": "user-pw",
+                    "tls": { "enabled": true, "server_name": "ninja.example.com" }
+                },
+                { "type": "direct", "tag": "direct" }
+            ],
+            "route": { "rules": [], "final": "node-2", "default_domain_resolver": "dns-direct" },
+            "dns": { "servers": [{ "type": "local", "tag": "dns-direct" }], "rules": [] }
+        });
+        let none_plan = plan_extra_core_with_allocator(&pure_ninja.to_string(), &mut || Ok(26000)).unwrap();
+        assert!(none_plan.is_none());
     }
 }

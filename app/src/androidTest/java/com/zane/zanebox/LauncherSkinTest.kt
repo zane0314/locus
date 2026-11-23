@@ -18,7 +18,7 @@ class LauncherSkinTest {
     private fun assertLauncher(skin:String) {
         val entries=launcherEntries()
         assertEquals("桌面入口必须唯一",1,entries.size)
-        assertEquals("${context.packageName}.${launcherAliasForSkin(skin)}",entries.single().activityInfo.name)
+        assertEquals("com.zane.zanebox.${launcherAliasForSkin(skin)}",entries.single().activityInfo.name)
         assertEquals(skin,enabledLauncherSkin(context))
     }
     private fun await(condition:()->Boolean) {
@@ -37,7 +37,7 @@ class LauncherSkinTest {
                 assertTrue(info.icon!=0);assertNotNull(context.packageManager.getActivityIcon(ComponentName(context,info.name)))
                 icons+=info.icon
             }
-            assertEquals("五套皮肤应使用五个独立图标资源",5,icons.size)
+            assertEquals("五套皮肤应对应 4 个独立图标资源（linear 与 prism 共用主图标）",4,icons.size)
         } finally {applyLauncherIcon(context,original)}
     }
     @Test fun failedPersistenceRestoresThePreviousLauncher() {
@@ -54,7 +54,7 @@ class LauncherSkinTest {
     @Test fun failedPersistenceRestoresExactDefaultAndRetiredStates() {
         val pm=context.packageManager
         val components=(skinLauncherAliases.values+listOf("launcher.PixelAlias","launcher.NodeNAlias","launcher.ChannelGateAlias","launcher.ConfluenceAlias","launcher.LaunchPathAlias"))
-            .map {ComponentName(context.packageName,"${context.packageName}.$it")}
+            .map {ComponentName(context.packageName,"com.zane.zanebox.$it")}
         val original=components.associateWith(pm::getComponentEnabledSetting)
         fun restore(states:Map<ComponentName,Int>) {
             states.forEach { (name,state) -> pm.setComponentEnabledSetting(name,state,PackageManager.DONT_KILL_APP) }
@@ -67,7 +67,7 @@ class LauncherSkinTest {
                 fail("保存失败应被报告")
             } catch(e:IllegalStateException) {assertEquals("fixture database failure",e.message)}
             assertEquals(before,components.associateWith(pm::getComponentEnabledSetting))
-            assertLauncher("prism")
+            assertLauncher("linear")
         } finally {restore(original)}
     }
     @Test fun legacyIconIsIgnoredAndRapidChangesRestartAndResetStayBound() {
@@ -77,8 +77,8 @@ class LauncherSkinTest {
             store.update {it.copy(settings=it.settings+("uiSkin" to "claude")+("launcherIcon" to "pixel"))}
             val pm=context.packageManager
             pm.setComponentEnabledSettings(listOf(
-                PackageManager.ComponentEnabledSetting(ComponentName(context.packageName,"${context.packageName}.launcher.PixelAlias"),PackageManager.COMPONENT_ENABLED_STATE_ENABLED,PackageManager.DONT_KILL_APP),
-                PackageManager.ComponentEnabledSetting(ComponentName(context.packageName,"${context.packageName}.${launcherAliasForSkin(enabledLauncherSkin(context))}"),PackageManager.COMPONENT_ENABLED_STATE_DISABLED,PackageManager.DONT_KILL_APP),
+                PackageManager.ComponentEnabledSetting(ComponentName(context.packageName,"com.zane.zanebox.launcher.PixelAlias"),PackageManager.COMPONENT_ENABLED_STATE_ENABLED,PackageManager.DONT_KILL_APP),
+                PackageManager.ComponentEnabledSetting(ComponentName(context.packageName,"com.zane.zanebox.${launcherAliasForSkin(enabledLauncherSkin(context))}"),PackageManager.COMPONENT_ENABLED_STATE_DISABLED,PackageManager.DONT_KILL_APP),
             ))
             ActivityScenario.launch(MainActivity::class.java).use { scenario ->
                 lateinit var vm:AppViewModel
@@ -94,8 +94,8 @@ class LauncherSkinTest {
                 await {!vm.busy.value && vm.data.value.setting("uiSkin")=="miro" && enabledLauncherSkin(context)=="miro"}
                 assertLauncher("miro")
                 scenario.onActivity {vm.resetSettings()}
-                await {!vm.busy.value && !vm.data.value.settings.containsKey("uiSkin") && enabledLauncherSkin(context)=="prism"}
-                assertLauncher("prism")
+                await {!vm.busy.value && !vm.data.value.settings.containsKey("uiSkin") && enabledLauncherSkin(context)=="linear"}
+                assertLauncher("linear")
             }
         } finally {store.update {original};applyLauncherIcon(context,resolvedUiSkin(original.setting("uiSkin")));store.close()}
     }

@@ -57,7 +57,7 @@ class AcceptanceTest {
   Assert.assertEquals(original,store.snapshot())
   File(context.getExternalFilesDir(null),"acceptance-config.json").writeText(ConfigBuilder.build(original))
   val client=ServiceClient(context);val events=java.util.concurrent.CopyOnWriteArrayList<String>();val observer=CoroutineScope(SupervisorJob()+Dispatchers.IO);observer.launch { client.events.collect { events.add(it) } };client.connect();Thread.sleep(1000)
-  shell("appops set com.zane.zanebox ACTIVATE_VPN allow")
+  shell("appops set ${context.packageName} ACTIVATE_VPN allow")
   try {
    client.start();waitFor("VPN已连接",30000){if(client.snapshot.value.state==4)Assert.fail("VPN失败：${client.snapshot.value.error}");client.snapshot.value.state==2};probe("EXIT_A")
    val session=client.snapshot.value
@@ -80,8 +80,8 @@ class AcceptanceTest {
    Assert.assertEquals(networkSession.generation,client.snapshot.value.generation)
    shell("input keyevent 223");Thread.sleep(1000);probe("EXIT_A");shell("input keyevent 224");shell("wm dismiss-keyguard")
    Assert.assertEquals(networkSession.started,client.snapshot.value.started)
-   val oldStarted=client.snapshot.value.started;val bgPid=shell("pidof com.zane.zanebox:bg").trim();Assert.assertTrue(bgPid.matches(Regex("[0-9]+")))
-   shell("run-as com.zane.zanebox kill -9 $bgPid")
+   val oldStarted=client.snapshot.value.started;val bgPid=shell("pidof ${context.packageName}:bg").trim();Assert.assertTrue(bgPid.matches(Regex("[0-9]+")))
+   shell("run-as ${context.packageName} kill -9 $bgPid")
    waitFor("后台进程死亡后STICKY恢复",40000){client.snapshot.value.state==2 && client.snapshot.value.started>oldStarted};probe("EXIT_A")
    client.stop();waitFor("停止"){client.snapshot.value.state==0};client.start();waitFor("重连",30000){client.snapshot.value.state==2};probe("EXIT_A")
    client.refreshLogs();waitFor("服务日志"){client.logs.value.isNotEmpty()};Assert.assertFalse(client.logs.value.joinToString().contains("FATAL EXCEPTION"))

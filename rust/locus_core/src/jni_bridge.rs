@@ -20,10 +20,11 @@ use crate::route_rules::{
     rule_set_format, smart_policy_keys, smart_target, with_factory_route_defaults,
 };
 use crate::runtime_logic::{
-    chain_parent_probes, chain_probe_keys, node_test_label, parse_traffic_samples,
-    read_chain_probe_plans, reorder_visible_ids, restorable_selector_choices, routed_chain_nodes,
-    sampling_tracked_tags, saved_choice_delay, smart_lowest_node, smart_target_node_ids,
-    target_latency_label, target_plan_create, traffic_domain,
+    active_url_test_groups, chain_parent_probes, chain_probe_keys, node_test_label,
+    parse_traffic_samples, read_chain_probe_plans, reorder_visible_ids,
+    restorable_selector_choices, routed_chain_nodes, sampling_tracked_tags, saved_choice_delay,
+    smart_lowest_node, smart_target_node_ids, target_latency_label, target_plan_create,
+    traffic_domain,
 };
 use crate::share_uri::{hysteria_hop_interval, percent_decode, socks_user_info, ShareUri};
 use crate::subscription_ops::{
@@ -543,6 +544,10 @@ fn dispatch(op: &str, body: &str) -> Result<Value, String> {
         "samplingTrackedTags" => {
             let req = parse_req(body)?;
             Ok(json!(sampling_tracked_tags(req_str(&req, "config")?)?))
+        }
+        "activeUrlTestGroups" => {
+            let req = parse_req(body)?;
+            Ok(json!(active_url_test_groups(req_str(&req, "config")?)?))
         }
         "trafficDomain" => {
             let req = parse_req(body)?;

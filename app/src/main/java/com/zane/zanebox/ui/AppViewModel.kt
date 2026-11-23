@@ -267,9 +267,22 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun updateGroup(group: Group) = task { updateGroupNow(group) }
     fun updateAllGroups() {
         val groups=data.value.groups.filter { it.enabled && it.subscriptionUrl.isNotBlank() }
-        if(groups.isEmpty())message.value="没有可更新的订阅" else groups.forEach(::updateGroup)
+        if(groups.isEmpty()) { message.value="没有可更新的订阅";return }
+        task {
+            var testedOk=0;var testedIncomplete=0;var updateFailed=0
+            for(group in groups) {
+                try {
+                    if(updateGroupNow(group,quiet=true))testedOk++ else testedIncomplete++
+                } catch(e:kotlinx.coroutines.CancellationException) {
+                    throw e
+                } catch(_:Exception) {
+                    updateFailed++
+                }
+            }
+            message.value="全部更新结束：${testedOk} 组测速完成，${testedIncomplete} 组测速未完成，${updateFailed} 组更新失败"
+        }
     }
-    private suspend fun updateGroupNow(requested:Group) {
+    private suspend fun updateGroupNow(requested:Group,quiet:Boolean=false):Boolean {
         val group=if(derivedGroupSourceId(requested)>0)store.snapshot().groups.firstOrNull { it.id==derivedGroupSourceId(requested) } ?: error("源分组已删除，链式分组已保留")else requested
         require(group.subscriptionUrl.isNotBlank()) { "当前分组没有订阅地址" }
         val context=getApplication<Application>()
@@ -277,8 +290,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         val connected=service.snapshot.value.state==2 || (options.updateWhenConnectedOnly && SubscriptionScheduler.connectionCheck(context))
         val updated=SubscriptionUpdater.update(store,group,context,connected)
         SubscriptionScheduler.reconcile(context,store.snapshot())
-        SubscriptionScheduler.apply(context,store,updated,automatic=false)
-        message.value="订阅已更新并完成延迟测试"
+        val measured=SubscriptionScheduler.apply(context,store,updated,automatic=false)
+        if(!quiet && measured)message.value="订阅已更新并完成延迟测试"
+        return measured
     }
     fun saveGroup(inputGroup:Group,fetch:Boolean,onSaved:()->Unit={},onError:(String)->Unit={}) = task(onError) {
         val group=inputGroup.copy(id=inputGroup.id.takeIf {it>0} ?: store.nextId())

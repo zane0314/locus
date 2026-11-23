@@ -57,6 +57,7 @@ internal object SettingDefaults {
         "rulesUpdateInterval" to "24h",
         "urlTestInterval" to "5m",
         "urlTestTolerance" to "5",
+        "autoTestPowerMode" to "normal",
         "fragmentLength" to "100-200",
         "fragmentInterval" to "10-20",
         "dnsRemote" to "https://1.1.1.1/dns-query",

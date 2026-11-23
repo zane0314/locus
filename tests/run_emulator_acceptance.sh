@@ -63,22 +63,22 @@ esac
 "$ADB" install -r "$APK" >"$OUT/install.txt"
 "$ADB" install -r "$TEST" >>"$OUT/install.txt"
 "$ADB" install -r "$PROBE" >>"$OUT/install.txt"
-"$ADB" shell pm clear com.zane.zanebox >>"$OUT/install.txt"
-"$ADB" shell pm grant com.zane.zanebox android.permission.POST_NOTIFICATIONS
+"$ADB" shell pm clear com.zane.locus >>"$OUT/install.txt"
+"$ADB" shell pm grant com.zane.locus android.permission.POST_NOTIFICATIONS
 # Fixtures have controlled local exits; public reachability probes must not change network scores.
 "$ADB" shell settings put global captive_portal_mode 0
 "$ADB" shell settings put global private_dns_mode off
 "$ADB" logcat -c
 set +e
-"$ADB" shell am instrument -w -r -e class "$classes" com.zane.zanebox.test/androidx.test.runner.AndroidJUnitRunner >"$OUT/instrumentation.txt" 2>&1
+"$ADB" shell am instrument -w -r -e class "$classes" com.zane.locus.test/androidx.test.runner.AndroidJUnitRunner >"$OUT/instrumentation.txt" 2>&1
 RC=$?
 set -e
 "$ADB" logcat -d >"$OUT/logcat.txt"
-"$ADB" shell dumpsys package com.zane.zanebox >"$OUT/package.txt"
+"$ADB" shell dumpsys package com.zane.locus >"$OUT/package.txt"
 "$ADB" shell dumpsys connectivity >"$OUT/connectivity.txt"
-"$ADB" pull /sdcard/Android/data/com.zane.zanebox/files/ "$OUT/device-files" >"$OUT/pull.txt" 2>&1 || true
+"$ADB" pull /sdcard/Android/data/com.zane.locus/files/ "$OUT/device-files" >"$OUT/pull.txt" 2>&1 || true
 cp "$ROOT/version.properties" "$OUT/version.properties"
-"$ADB" shell run-as com.zane.zanebox cat cache/neko.log >"$OUT/native-runtime.log" 2>&1 || true
+"$ADB" shell run-as com.zane.locus cat cache/neko.log >"$OUT/native-runtime.log" 2>&1 || true
 python3 - "$OUT" "$RC" "${ZANE_TEST_COUNT:-}" "$classes" <<'PY'
 import pathlib,re,sys,json,hashlib,subprocess,os
 p=pathlib.Path(sys.argv[1]);text=(p/'instrumentation.txt').read_text();crash=(p/'logcat.txt').read_text()
@@ -86,7 +86,7 @@ reasons=[]
 adb=[os.environ.get('ADB','/opt/homebrew/bin/adb')]
 photos=[]
 for photo in (p/'device-files').rglob('*.png'):
-    device='/sdcard/Android/data/com.zane.zanebox/files/'+photo.relative_to(p/'device-files').as_posix()
+    device='/sdcard/Android/data/com.zane.locus/files/'+photo.relative_to(p/'device-files').as_posix()
     local=hashlib.sha256(photo.read_bytes()).hexdigest()
     remote=subprocess.check_output(adb+['shell','sha256sum',device],text=True).split()[0]
     photos.append({'device':device,'host':str(photo.resolve()),'sha256':local,'verified':local==remote})
@@ -100,7 +100,7 @@ if sys.argv[2]!='0' or not match or int(match[1])==0 or 'FAILURES!!!' in text or
 expected=sys.argv[3]
 if expected and (not expected.isdecimal() or int(expected)==0):reasons.append('声明的测试数量必须为正整数')
 elif expected and count is not None and count!=int(expected):reasons.append('实际测试数量与声明范围不符')
-if re.search(r'FATAL EXCEPTION[^\n]*\n(?:[^\n]*\n){0,6}[^\n]*com\.zane\.(zanebox|probe)',crash):reasons.append('发现应用/Probe崩溃')
+if re.search(r'FATAL EXCEPTION[^\n]*\n(?:[^\n]*\n){0,6}[^\n]*com\.zane\.(locus|zanebox|probe)',crash):reasons.append('发现应用/Probe崩溃')
 # Selected test results define the scope; legacy screenshot names are optional evidence.
 result={'status':'FAIL' if reasons else 'PASS','reasons':reasons,'scope':sys.argv[4],'instrumentationTests':count,'instrumentationFailures':failures}
 (p/'result.json').write_text(json.dumps(result,ensure_ascii=False,indent=2));print(json.dumps(result,ensure_ascii=False));sys.exit(bool(reasons))

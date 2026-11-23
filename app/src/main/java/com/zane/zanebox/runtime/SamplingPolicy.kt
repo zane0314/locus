@@ -15,4 +15,9 @@ internal object SamplingPolicy {
         val arr = RustCore.callArray("samplingTrackedTags", JSONObject().put("config", root.toString()))
         return (0 until arr.length()).map { arr.getString(it) }
     }
+
+    fun activeUrlTestGroups(config: String): Set<String> {
+        val arr = RustCore.callArray("activeUrlTestGroups", JSONObject().put("config", config))
+        return (0 until arr.length()).mapTo(LinkedHashSet()) { arr.getString(it) }
+    }
 }

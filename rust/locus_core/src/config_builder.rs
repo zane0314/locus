@@ -1153,15 +1153,12 @@ pub fn build_config(
             .iter()
             .map(|n| Value::String(format!("node-{}", n.id)))
             .collect();
-        out.push(json!({
-            "type": "urltest",
-            "tag": "home-auto",
-            "outbounds": outs,
-            "url": data.setting("testUrl"),
-            "interval": "10m",
-            "idle_timeout": "10m",
-            "tolerance": 30,
-        }));
+        let mut item = Map::new();
+        item.insert("type".into(), Value::String("urltest".to_string()));
+        item.insert("tag".into(), Value::String("home-auto".to_string()));
+        item.insert("outbounds".into(), Value::Array(outs));
+        url_test_options(&mut item, data)?;
+        out.push(Value::Object(item));
     }
     let mut proxy_outs: Vec<String> = Vec::new();
     if auto {
@@ -1477,6 +1474,41 @@ pub fn build_config(
                 url_test_options(&mut ut, data)?;
                 out.push(Value::Object(ut));
                 tags.insert(tag.clone());
+                tag
+            } else if let Some(rest) = choice.strip_prefix("group:") {
+                let Ok(gid) = rest.parse::<i64>() else {
+                    continue;
+                };
+                if gid <= 0 {
+                    continue;
+                }
+                let members: Vec<String> = eligible_by_group
+                    .get(&gid)
+                    .map(|list| {
+                        list.iter()
+                            .filter(|n| {
+                                beans[&n.id].get("type").and_then(Value::as_str) != Some("custom")
+                            })
+                            .map(|n| format!("node-{}", n.id))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                if members.is_empty() {
+                    continue;
+                }
+                let tag = format!("smart-group-{gid}");
+                if !tags.contains(&tag) {
+                    let mut ut = Map::new();
+                    ut.insert("type".into(), Value::String("urltest".to_string()));
+                    ut.insert("tag".into(), Value::String(tag.clone()));
+                    ut.insert(
+                        "outbounds".into(),
+                        Value::Array(members.into_iter().map(Value::String).collect()),
+                    );
+                    url_test_options(&mut ut, data)?;
+                    out.push(Value::Object(ut));
+                    tags.insert(tag.clone());
+                }
                 tag
             } else {
                 if let Some(rest) = choice.strip_prefix("node:") {

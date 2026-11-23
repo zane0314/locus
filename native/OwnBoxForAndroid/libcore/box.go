@@ -484,6 +484,112 @@ func (b *BoxInstance) ApplyURLTestResults(groupTag string, results string) strin
 	return applier.ApplyTestResults(parsed)
 }
 
+func (b *BoxInstance) ApplyAutoURLTestResults(groupTag string, results string) string {
+	out, ok := b.groupOutbound(groupTag)
+	if !ok {
+		return ""
+	}
+	applier, ok := out.(interface {
+		ApplyAutoTestResults(map[string]uint16) string
+	})
+	if !ok {
+		return ""
+	}
+	return applier.ApplyAutoTestResults(parseURLTestResults(results))
+}
+
+func (b *BoxInstance) URLTestTouch(groupTag string) {
+	out, ok := b.groupOutbound(groupTag)
+	if !ok {
+		return
+	}
+	if touchable, ok := out.(interface{ TouchForTraffic() }); ok {
+		touchable.TouchForTraffic()
+	}
+}
+
+func (b *BoxInstance) URLTestDueIn(groupTag string) int64 {
+	out, ok := b.groupOutbound(groupTag)
+	if !ok {
+		return -1
+	}
+	probe, ok := out.(interface{ URLTestDueIn() time.Duration })
+	if !ok {
+		return -1
+	}
+	due := probe.URLTestDueIn()
+	if due < 0 {
+		return -1
+	}
+	return due.Milliseconds()
+}
+
+func (b *BoxInstance) URLTestIdleFor(groupTag string) int64 {
+	out, ok := b.groupOutbound(groupTag)
+	if !ok {
+		return -1
+	}
+	probe, ok := out.(interface{ URLTestIdleFor() time.Duration })
+	if !ok {
+		return -1
+	}
+	idle := probe.URLTestIdleFor()
+	if idle < 0 {
+		return -1
+	}
+	return idle.Milliseconds()
+}
+
+func (b *BoxInstance) URLTestInFlight(groupTag string) bool {
+	out, ok := b.groupOutbound(groupTag)
+	if !ok {
+		return false
+	}
+	probe, ok := out.(interface{ URLTestInFlight() bool })
+	return ok && probe.URLTestInFlight()
+}
+
+func (b *BoxInstance) URLTestIfDue(groupTag string, idleLimitMs int64) bool {
+	out, ok := b.groupOutbound(groupTag)
+	if !ok {
+		return false
+	}
+	runner, ok := out.(interface {
+		URLTestIfDue(context.Context, time.Duration) bool
+	})
+	if !ok {
+		return false
+	}
+	var idleLimit time.Duration
+	if idleLimitMs > 0 {
+		idleLimit = time.Duration(idleLimitMs) * time.Millisecond
+	}
+	return runner.URLTestIfDue(b.ctx, idleLimit)
+}
+
+func (b *BoxInstance) URLTestRoundInfo(groupTag string) string {
+	out, ok := b.groupOutbound(groupTag)
+	if !ok {
+		return ""
+	}
+	probe, ok := out.(interface{ URLTestRoundInfo() string })
+	if !ok {
+		return ""
+	}
+	return probe.URLTestRoundInfo()
+}
+
+func (b *BoxInstance) CloseIdleConnections() {
+	if b == nil || b.Box == nil {
+		return
+	}
+	for _, out := range b.Outbound().Outbounds() {
+		if closer, ok := out.(interface{ CloseIdleConnections() }); ok {
+			closer.CloseIdleConnections()
+		}
+	}
+}
+
 func parseURLTestResults(results string) map[string]uint16 {
 	parsed := make(map[string]uint16)
 	for _, line := range strings.Split(results, "\n") {
@@ -589,6 +695,25 @@ func UrlTest(i *BoxInstance, link string, timeout int32) (latency int32, err err
 // UrlTestFull uses the same per-instance measurement policy as UrlTest.
 func UrlTestFull(i *BoxInstance, link string, timeout int32) (latency int32, err error) {
 	return UrlTest(i, link, timeout)
+}
+
+// UrlTestSingle runs a single URL measurement without splitting the timeout or retrying a fallback link.
+func UrlTestSingle(i *BoxInstance, link string, timeout int32) (latency int32, err error) {
+	defer device.DeferPanicToError("box.UrlTestSingle", func(err_ error) { err = err_ })
+	if i == nil {
+		i = mainInstance.Load()
+	}
+	parent := context.Background()
+	if i != nil && i.ctx != nil {
+		parent = i.ctx
+	}
+	ctx, cancel := context.WithTimeout(parent, time.Duration(timeout)*time.Millisecond)
+	defer cancel()
+	if i == nil {
+		client := &http.Client{Timeout: time.Duration(timeout) * time.Millisecond}
+		return urlTestDirect(ctx, client, link)
+	}
+	return urlTest(ctx, i, link, timeout)
 }
 
 // urlTest shares the actual cold/warm measurement implementation with automatic

@@ -60,6 +60,7 @@ internal fun preferenceSections(data:AppData)=listOf(
         choice("rulesUpdateInterval","规则集更新间隔",SettingDefaults.value("rulesUpdateInterval"),"off" to "关闭","6h" to "6 小时","12h" to "12 小时","24h" to "24 小时","3d" to "3 天","7d" to "7 天"),
         choice("urlTestInterval","URLTest 间隔",SettingDefaults.value("urlTestInterval"),*urlTestIntervals.toTypedArray()),
         choice("urlTestTolerance","URLTest 切换容差",SettingDefaults.value("urlTestTolerance"),*urlTestTolerances.toTypedArray()),
+        choice("autoTestPowerMode","自动测速模式",SettingDefaults.value("autoTestPowerMode"),"normal" to "正常模式","saving" to "省电模式"),
     ),
     "分片设置" to listOf(
         boolean("enableTLSFragment","启用 TLS Client Hello 分片"),
@@ -146,6 +147,7 @@ internal val preferenceAppearance=mapOf(
     "rulesUpdateInterval" to PreferenceAppearance("RuleSet 更新间隔","",R.drawable.zb_ref_ic_baseline_shutter_speed_24),
     "urlTestInterval" to PreferenceAppearance("URLTest 间隔","",0),
     "urlTestTolerance" to PreferenceAppearance("URLTest 切换容差","",0),
+    "autoTestPowerMode" to PreferenceAppearance("自动测速模式","正常：后台按间隔测速；省电：闲置后暂停。系统限制可能延迟后台测速",0),
     "enableTLSFragment" to PreferenceAppearance("启用TLS Client Hello分片","",0),
     "fragmentLength" to PreferenceAppearance("分片包长（最小-最大）","",0),
     "fragmentInterval" to PreferenceAppearance("分片间隔（最小-最大）","",0),

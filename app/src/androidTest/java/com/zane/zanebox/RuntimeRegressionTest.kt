@@ -34,7 +34,7 @@ class RuntimeRegressionTest {
         var client=ServiceClient(context);client.connect()
         val evidence=JSONObject()
         try {
-            shell("appops set com.zane.zanebox ACTIVATE_VPN deny")
+            shell("appops set ${context.packageName} ACTIVATE_VPN deny")
             context.getSharedPreferences("runtime",android.content.Context.MODE_PRIVATE).edit().putBoolean("connected",true).commit()
             ins.runOnMainSync { StartReceiver().onReceive(context,Intent(Intent.ACTION_BOOT_COMPLETED)) }
             waitFor("仅代理自动启动，无VPN权限") { if(client.snapshot.value.state==4)fail(client.snapshot.value.error);client.snapshot.value.state==2 }
@@ -110,7 +110,7 @@ class RuntimeRegressionTest {
             notification.actions.first { it.title.toString()=="断开" }.actionIntent.send()
             waitFor("通知断开实际服务") { client.snapshot.value.state==0 };evidence.put("notificationStop",true)
             client.start();waitFor("磁贴验证前连接") { client.snapshot.value.state==2 }
-            val tile="com.zane.zanebox/.runtime.QuickTileService"
+            val tile="${context.packageName}/com.zane.zanebox.runtime.QuickTileService"
             // Repeated APK installs can leave a tile spec with no live CustomTile in SystemUI.
             shell("cmd statusbar remove-tile $tile")
             waitFor("旧磁贴移除") { !shell("settings get secure sysui_qs_tiles").contains(tile) }

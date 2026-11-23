@@ -72,6 +72,60 @@ pub fn sampling_tracked_tags(config: &str) -> Result<Vec<String>, String> {
         .collect())
 }
 
+pub fn active_url_test_groups(config: &str) -> Result<Vec<String>, String> {
+    let root: Value = serde_json::from_str(config).map_err(|e| format!("JSON 解析失败: {e}"))?;
+    let Some(arr) = root.get("outbounds").and_then(Value::as_array) else {
+        return Ok(Vec::new());
+    };
+    let mut by_tag: HashMap<String, &Map<String, Value>> = HashMap::new();
+    for item in arr {
+        if let Some(obj) = item.as_object() {
+            if let Some(tag) = obj.get("tag").and_then(Value::as_str) {
+                by_tag.insert(tag.to_string(), obj);
+            }
+        }
+    }
+    let mut visited = HashSet::new();
+    let mut found = IndexSet::new();
+    fn visit(
+        tag: &str,
+        by_tag: &HashMap<String, &Map<String, Value>>,
+        visited: &mut HashSet<String>,
+        found: &mut IndexSet<String>,
+    ) {
+        if !visited.insert(tag.to_string()) {
+            return;
+        }
+        let Some(obj) = by_tag.get(tag) else { return };
+        match obj.get("type").and_then(Value::as_str).unwrap_or("") {
+            "urltest" => {
+                found.insert(tag.to_string());
+                if let Some(members) = obj.get("outbounds").and_then(Value::as_array) {
+                    for m in members {
+                        if let Some(s) = m.as_str() {
+                            visit(s, by_tag, visited, found);
+                        }
+                    }
+                }
+            }
+            "selector" => {
+                if let Some(def) = obj
+                    .get("default")
+                    .and_then(Value::as_str)
+                    .filter(|s| !s.trim().is_empty())
+                {
+                    visit(def, by_tag, visited, found);
+                }
+            }
+            _ => {}
+        }
+    }
+    for tag in sampling_tracked_tags(config)? {
+        visit(&tag, &by_tag, &mut visited, &mut found);
+    }
+    Ok(found.into_iter().collect())
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TrafficSample {
     pub id: String,
@@ -622,8 +676,15 @@ pub fn resolve_target_group(data: &AppData, target: &str, service_key: &str) -> 
             None
         }
     } else if let Some(rest) = choice.strip_prefix("group:") {
-        let id = rest.parse::<i64>().ok()?;
+        let id = rest.parse::<i64>().ok().filter(|&v| v > 0)?;
         let group = data.groups.iter().find(|g| g.enabled && g.id == id)?;
+        if !service_key.trim().is_empty() {
+            return Some(TargetGroup {
+                tag: format!("smart-group-{}", group.id),
+                url_test: true,
+                merge_id: 0,
+            });
+        }
         let opts: Map<String, Value> = serde_json::from_str::<Value>(&group.options)
             .ok()
             .and_then(|v| v.as_object().cloned())
@@ -777,7 +838,12 @@ fn target_link_fingerprint(data: &AppData, members: &[i64]) -> String {
     let groups_snap: Vec<Value> = used_groups
         .iter()
         .map(|id| match groups.get(id) {
-            Some(g) => serde_json::json!([g.id, g.enabled, g.front_proxy, g.landing_proxy, g.options]),
+            Some(g) => {
+                let mut opts = parse_map(&g.options);
+                opts.shift_remove("subscriptionRuntime");
+                opts.shift_remove("subscriptionLastUpdated");
+                serde_json::json!([g.id, g.enabled, g.front_proxy, g.landing_proxy, opts])
+            }
             None => Value::Null,
         })
         .collect();

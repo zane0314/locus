@@ -1461,6 +1461,9 @@ fn clash_map(m: &Map<String, Value>) -> Result<ParsedNode, String> {
         .ok_or_else(|| "Clash 节点端口无效".to_string())?;
     let server = s("server", "");
     if server.trim().is_empty() {
+        if kind == "ninja" {
+            return Err("Ninja 节点缺少服务器".to_string());
+        }
         return Err("Clash 节点缺少服务器".to_string());
     }
     let mut o = Map::new();
@@ -1621,9 +1624,6 @@ fn clash_map(m: &Map<String, Value>) -> Result<ParsedNode, String> {
     }
 
     if kind == "ninja" {
-        if s("server", "").trim().is_empty() {
-            return Err("Ninja 节点缺少服务器".to_string());
-        }
         if m.get("tls").and_then(Value::as_bool) != Some(true) {
             return Err("Ninja 仅支持 TLS".to_string());
         }

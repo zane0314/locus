@@ -81,7 +81,7 @@ class RealSocksChainTest {
             }
             val first=f.data.nodes.first {it.id==f.chainIds.first()}
             store.replace(f.data.copy(settings=f.data.settings+("selectedNodeId" to "${first.id}")+("selectedGroupId" to "${first.groupId}")))
-            client.connect();shell("appops set com.zane.zanebox ACTIVATE_VPN allow");client.start()
+            client.connect();shell("appops set ${context.packageName} ACTIVATE_VPN allow");client.start()
             waitFor("真实链 VPN 启动",60000) {client.snapshot.value.state in listOf(2,4)}
             assertEquals("真实链 VPN 启动失败",2,client.snapshot.value.state)
             fun connectedChecks(label:String) {

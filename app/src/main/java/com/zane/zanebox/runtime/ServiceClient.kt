@@ -182,7 +182,7 @@ class ServiceClient(context:Context,private val targetClass:Class<*>?=null) {
     }
     private fun connectedRuntime():IRuntime = remote ?: error("后台服务已断开，请重试")
     suspend fun readSnapshot():RuntimeSnapshot {ensureBinding();val runtime=connectedRuntime();return RuntimeSnapshot.parse(runtime.getSnapshot())}
-    suspend fun applySubscription(groupId:Long,onApplied:()->Unit={}) = subscriptionApply.withLock {
+    suspend fun applySubscription(groupId:Long,onApplied:()->Unit={}):Boolean = subscriptionApply.withLock {
         val request=java.util.UUID.randomUUID().toString()
         try {
             ensureBinding()
@@ -205,6 +205,7 @@ class ServiceClient(context:Context,private val targetClass:Class<*>?=null) {
                 }.first {it!=null}
             }
             if(measured!=true)event.emit("订阅已应用，延迟测试未完成")
+            measured==true
         } finally {subscriptionRequest="";subscriptionResults.update {it-request};subscriptionMeasurements.update {it-request}}
     }
     private fun command(action:String,payload:String="") {submit {ensureBinding();val runtime=connectedRuntime();runtime.command(action,payload)}}
@@ -316,9 +317,9 @@ class ServiceClient(context:Context,private val targetClass:Class<*>?=null) {
             val client=ServiceClient(context,target)
             return try { withTimeout(5000) { client.readSnapshot().state==2 } } catch(_:Exception) { false } finally { client.close() }
         }
-        suspend fun updateSubscription(context:Context,groupId:Long,onApplied:()->Unit={}) {
+        suspend fun updateSubscription(context:Context,groupId:Long,onApplied:()->Unit={}):Boolean {
             val client=ServiceClient(context,runningServiceClass(context) ?: RuntimeServiceTarget.serviceClass(context))
-            try {client.applySubscription(groupId,onApplied)} finally {client.close()}
+            return try {client.applySubscription(groupId,onApplied)} finally {client.close()}
         }
     }
 }

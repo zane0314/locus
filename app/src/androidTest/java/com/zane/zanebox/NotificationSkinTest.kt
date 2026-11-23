@@ -127,7 +127,7 @@ class NotificationSkinTest {
             client.connect();kotlinx.coroutines.runBlocking {client.readSnapshot()};client.stop()
             await("旧VPN停止") {client.snapshot.value.state==0}
             store.replace(AppData(nodes=listOf(Node(1,1,"VPN fixture A","""{"type":"socks","server":"10.0.2.2","server_port":19081}""")),groups=listOf(Group(1,"VPN notification")),settings=mapOf("serviceMode" to "vpn","selectedNodeId" to "1","selectedGroupId" to "1","dnsRemote" to "local","dnsDirect" to "local","sniff" to "false","statsEnabled" to "false","bypassLan" to "false","bypassLanInCore" to "false","uiSkin" to "prism")))
-            shell("appops set com.zane.zanebox ACTIVATE_VPN allow")
+            shell("appops set ${context.packageName} ACTIVATE_VPN allow")
             assertNull("模拟器VPN授权",android.net.VpnService.prepare(context))
             scenario=ActivityScenario.launch(MainActivity::class.java)
             lateinit var vm:AppViewModel

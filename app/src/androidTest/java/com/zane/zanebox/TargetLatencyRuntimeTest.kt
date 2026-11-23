@@ -90,12 +90,12 @@ class TargetLatencyRuntimeTest {
         val facts=JSONObject()
         try {
             delays(500,40);store.replace(TargetLatencyFixture.data());client.connect()
-            shell("appops set com.zane.zanebox ACTIVATE_VPN allow")
+            shell("appops set ${context.packageName} ACTIVATE_VPN allow")
             client.start();waitFor("VPN连接",30000){client.snapshot.value.state==2 || client.snapshot.value.state==4}
             assertEquals(client.snapshot.value.error,2,client.snapshot.value.state)
             waitFor("自动组初始选中慢慢交换前B",20000) {runCatching{get("http://203.0.113.11:19080/probe",true)=="EXIT_B"}.getOrDefault(false)}
             val generation=client.snapshot.value.generation
-            val pid=shell("pidof com.zane.zanebox:bg").trim()
+            val pid=shell("pidof ${context.packageName}:bg").trim()
             val network=realUid("203.0.113.8","EXIT_B")
             delays(40,500)
             for((target,key,ip) in listOf(Triple("group:6101","youtube","203.0.113.9"),Triple("merge:6105","telegram","203.0.113.10"),
@@ -105,7 +105,7 @@ class TargetLatencyRuntimeTest {
                 waitFor("$target 内核实际最低成功延迟出口 $expected",10000){get("http://$ip:19080/probe",true)==expected}
                 assertEquals(network,realUid(ip,expected))
                 assertEquals(generation,client.snapshot.value.generation)
-                assertEquals(pid,shell("pidof com.zane.zanebox:bg").trim())
+                assertEquals(pid,shell("pidof ${context.packageName}:bg").trim())
                 assertEquals(6102L,store.snapshot().selectedNodeId)
                 assertEquals(TargetLatencyFixture.data().setting("smart.$key.target"),store.snapshot().setting("smart.$key.target"))
                 facts.put(target,JSONObject().put("winner",winner(client)).put("latency",client.testResults.value.getValue(winner(client))).put("exit",expected))

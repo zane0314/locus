@@ -62,4 +62,31 @@ class NativeSchemaTest {
             File(context.getExternalFilesDir(null),"native-asset-result.json").writeText(JSONObject().put("invalidPreservesOriginal",true).put("validInstallRevision",client.assetRevision.value).toString(2))
         } finally { client.close() }
     }
+    @Test fun hybridMultiCoreAndNinjaConfigsValidateInRealRuntime() {
+        val context=InstrumentationRegistry.getInstrumentation().targetContext
+        val client=ServiceClient(context);client.connect()
+        try {
+            val vless="""{"type":"vless","server":"1.2.3.4","server_port":443,"uuid":"11111111-1111-1111-1111-111111111111","tls":{"enabled":true,"server_name":"vless.example.test"}}"""
+            val ninja="""{"type":"ninja","server":"ninja.example.test","server_port":443,"method":"aes-128-gcm","password":"fixture-outer","node_password":"node.example.test","pass":false,"tls":{"enabled":true,"server_name":"ninja.example.test"}}"""
+            val base=com.zane.zanebox.data.AppData(
+                nodes=listOf(com.zane.zanebox.data.Node(10,1,"VLESS",vless),com.zane.zanebox.data.Node(11,1,"Ninja",ninja)),
+                groups=listOf(com.zane.zanebox.data.Group(1,"Hybrid","https://example.test/sub")),
+                settings=mapOf("selectedNodeId" to "11","selectedGroupId" to "1","homeAutoSelect" to "true","autoTestPowerMode" to "saving","smart.ai.target" to "group:1","smartRules.ai" to "DOMAIN-SUFFIX,openai.com")
+            )
+            val names=mutableListOf<String>()
+            for(core in listOf("sing-box","xray","mihomo")) {
+                val mainName="hybrid-main-$core"
+                val testName="pure-ninja-test-$core"
+                val d=base.copy(settings=base.settings+("proxyCore" to core))
+                client.validateConfig(mainName,com.zane.zanebox.config.ConfigBuilder.build(d,com.zane.zanebox.config.Purpose.MAIN))
+                client.validateConfig(testName,com.zane.zanebox.config.ConfigBuilder.build(d,com.zane.zanebox.config.Purpose.TEST,testNodeId=11))
+                names+=mainName;names+=testName
+            }
+            val until=SystemClock.elapsedRealtime()+60000
+            while(!names.all { it in client.validationResults.value } && SystemClock.elapsedRealtime()<until)Thread.sleep(100)
+            val results=names.associateWith { client.validationResults.value[it].orEmpty() }
+            File(context.getExternalFilesDir(null),"hybrid-multicore-ninja-validation.json").writeText(JSONObject(results).toString(2))
+            assertEquals("混合多内核与 Ninja 配置校验失败",emptyMap<String,String>(),results.filterValues { it.isNotEmpty() })
+        } finally { client.close() }
+    }
 }

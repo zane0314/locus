@@ -37,7 +37,7 @@ object MultiCorePlanner {
 
 /**
  * Coordinates the three proxy cores (`sing-box`, `xray`, `mihomo`):
- * - `sing-box` runs directly in `SingBoxEngine`.
+ * - `sing-box` runs directly in `SingBoxEngine` (including custom `ninja` outbounds under hybrid plans).
  * - `xray` / `mihomo` run in isolated `:extraMain` / `:extraTest` processes via `libextra_cores.so`,
  *   bridged to sing-box's TUN/routing/DNS stack through Rust-planned loopback SOCKS5 + DNS bridges.
  */
@@ -45,9 +45,15 @@ class MultiCoreEngine(
     context: Context,
     private val platform: NativePlatform,
     private val protectFd: ((Int) -> Boolean)? = null,
+    private val onExtraCoreLost: (() -> Unit)? = null,
 ) {
     private val singBox = SingBoxEngine(platform)
-    private val extraMain = ExtraCoreClient(context.applicationContext, ExtraCoreMainService::class.java, protectFd)
+    private val extraMain = ExtraCoreClient(
+        context.applicationContext,
+        ExtraCoreMainService::class.java,
+        protectFd,
+        onUnexpectedLost = { if (activeExtraKind != null) onExtraCoreLost?.invoke() },
+    )
     private val extraTest = ExtraCoreClient(context.applicationContext, ExtraCoreTestService::class.java, protectFd)
     private val extraTestLock = Any()
 
@@ -60,7 +66,8 @@ class MultiCoreEngine(
     fun start(config: String) {
         val plan = MultiCorePlanner.plan(config)
         if (plan == null) {
-            singBox.start(config)
+            val clean = MultiCorePlanner.withCoreKind(config, MultiCorePlanner.CORE_SING_BOX)
+            singBox.start(clean)
             activeExtraKind = null
             return
         }
@@ -94,6 +101,15 @@ class MultiCoreEngine(
     fun selectGroup(groupTag: String, tag: String): Boolean = singBox.selectGroup(groupTag, tag)
     fun applyURLTestResults(groupTag: String, results: Map<String, Int>): String =
         singBox.applyURLTestResults(groupTag, results)
+    fun applyAutoURLTestResults(groupTag: String, results: Map<String, Int>): String =
+        singBox.applyAutoURLTestResults(groupTag, results)
+    fun urlTestTouch(groupTag: String) = singBox.urlTestTouch(groupTag)
+    fun urlTestDueIn(groupTag: String): Long = singBox.urlTestDueIn(groupTag)
+    fun urlTestIdleFor(groupTag: String): Long = singBox.urlTestIdleFor(groupTag)
+    fun urlTestInFlight(groupTag: String): Boolean = singBox.urlTestInFlight(groupTag)
+    fun urlTestIfDue(groupTag: String, idleLimitMs: Long): Boolean = singBox.urlTestIfDue(groupTag, idleLimitMs)
+    fun urlTestRoundInfo(groupTag: String): String = singBox.urlTestRoundInfo(groupTag)
+    fun closeIdleConnections() = singBox.closeIdleConnections()
 
     fun resetNetwork() = singBox.resetNetwork()
     fun sleep() = singBox.sleep()
@@ -102,7 +118,8 @@ class MultiCoreEngine(
     fun validate(config: String) {
         val plan = MultiCorePlanner.plan(config)
         if (plan == null) {
-            singBox.validate(config)
+            val clean = MultiCorePlanner.withCoreKind(config, MultiCorePlanner.CORE_SING_BOX)
+            singBox.validate(clean)
             return
         }
         singBox.validate(plan.singBoxConfig)
@@ -128,7 +145,8 @@ class MultiCoreEngine(
     ): T {
         val plan = MultiCorePlanner.plan(config)
         if (plan == null) {
-            val resolved = singBox.resolvedTestConfig(config, url, timeout, active)
+            val clean = MultiCorePlanner.withCoreKind(config, MultiCorePlanner.CORE_SING_BOX)
+            val resolved = singBox.resolvedTestConfig(clean, url, timeout, active)
             return block(resolved)
         }
         if (!active()) throw CancellationException("测速已取消")
@@ -156,11 +174,13 @@ class MultiCoreEngine(
         timeout: Int,
         prepared: (String) -> Unit = {},
         frontDelays: MutableMap<String, Int>? = null,
+        singleAttempt: Boolean = false,
         active: () -> Boolean = { true },
     ): Int {
         val plan = MultiCorePlanner.plan(config)
         if (plan == null) {
-            return singBox.test(config, url, timeout, prepared, frontDelays, active)
+            val clean = MultiCorePlanner.withCoreKind(config, MultiCorePlanner.CORE_SING_BOX)
+            return singBox.test(clean, url, timeout, prepared, frontDelays, singleAttempt, active)
         }
         if (!active()) throw CancellationException("测速已取消")
         return synchronized(extraTestLock) {
@@ -170,9 +190,9 @@ class MultiCoreEngine(
                 if (!active()) throw CancellationException("测速已取消")
                 extraTest.start(plan.kind, plan.extraCoreConfig)
                 if (!active()) throw CancellationException("测速已取消")
-                singBox.test(plan.singBoxConfig, url, timeout, prepared, frontDelays, active)
+                singBox.test(plan.singBoxConfig, url, timeout, prepared, frontDelays, singleAttempt, active)
             } finally {
-                runCatching { extraTest.stop() }
+                runCatching { extraTest.close() }
             }
         }
     }

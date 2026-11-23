@@ -105,7 +105,7 @@ class ChainRuntimeTest {
                 sources.groups.forEach {source->assertEquals(source,current.groups.first {it.id==source.id})}
             }
             assertSourcesUnchanged()
-            client.connect();shell("appops set com.zane.zanebox ACTIVATE_VPN allow");client.start()
+            client.connect();shell("appops set ${context.packageName} ACTIVATE_VPN allow");client.start()
             waitFor("VPN连接") {client.snapshot.value.state in listOf(2,4)}
             assertEquals(client.snapshot.value.error,2,client.snapshot.value.state)
             fun winner(id:Long)=JSONObject(client.chainSelections.value).optString("node-$c1")=="chain-$c1-landing-$id"

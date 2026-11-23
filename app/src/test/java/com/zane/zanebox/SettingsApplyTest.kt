@@ -8,7 +8,7 @@ import org.junit.Test
 class SettingsApplyTest {
     @Test fun onlyKnownSafeFieldsAutoApplyAndPendingManualChangesBlockThem() {
         for(key in listOf("theme","autoStart","testTimeout","networkReset","showDirectSpeed","acquireWakeLock","sort_group_1"))assertEquals(SettingsApply.LIVE,settingsApply(key))
-        for(key in listOf("routeMode","sniff","dnsRemote","ipv6Mode","tunStack","muxEnabled"))assertEquals(SettingsApply.AUTO,settingsApply(key))
+        for(key in listOf("routeMode","sniff","dnsRemote","ipv6Mode","tunStack","muxEnabled","autoTestPowerMode"))assertEquals(SettingsApply.AUTO,settingsApply(key))
         for(key in listOf("serviceMode","mixedPort","globalCustomConfig","allowLan","perAppPackages","unknownFutureSetting"))assertEquals(SettingsApply.MANUAL,settingsApply(key))
         val applied=AppData()
         assertFalse(hasManualSettingsPending(applied,applied.copy(settings=mapOf("mixedPort" to "2080","serviceMode" to "vpn","sniff" to "false"))))

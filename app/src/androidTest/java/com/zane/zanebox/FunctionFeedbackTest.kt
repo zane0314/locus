@@ -88,6 +88,7 @@ class FunctionFeedbackTest {
         compose.onNodeWithTag("node_field_uuid").performClick()
         compose.onNodeWithTag("editor_field_0").performTextReplacement("11111111-1111-4111-8111-111111111111")
         compose.onNodeWithTag("editor_save").performClick()
+        compose.waitUntil(5000) { compose.onAllNodesWithTag("editor_save").fetchSemanticsNodes().isEmpty() }
         compose.onNodeWithTag("node_save").performClick()
         compose.waitUntil(15000) { JSONObject(vm.data.value.nodes.single().outbound).optString("uuid").isNotBlank() && !vm.busy.value }
         compose.onNodeWithTag("node_save").assertDoesNotExist()
@@ -106,7 +107,8 @@ class FunctionFeedbackTest {
         assertTrue(JSONObject(vm.service.speedResult.value).getBoolean("done"))
     }
     @Test fun connectLabelStartsAndStopsTheActualProxyListener() {
-        val vm=seed(AppData(nodes=listOf(Node(404,404,"标签连接","""{"type":"socks","server":"127.0.0.1","server_port":9}""")),groups=listOf(Group(404,"连接")),settings=mapOf("serviceMode" to "proxy")))
+        val vm=seed(AppData(nodes=listOf(Node(404,404,"标签连接","""{"type":"socks","server":"127.0.0.1","server_port":9}""")),groups=listOf(Group(404,"连接")),settings=mapOf("serviceMode" to "proxy","uiSkin" to "prism")))
+        compose.waitUntil(10000) { compose.onAllNodesWithTag("tab_0").fetchSemanticsNodes().isNotEmpty() }
         compose.onNodeWithTag("tab_0").performClick()
         compose.waitUntil(30000) { vm.service.snapshot.value.state==2 }
         java.net.Socket("127.0.0.1",2080).use { assertTrue(it.isConnected) }
@@ -233,7 +235,7 @@ class FunctionFeedbackTest {
             compose.runOnIdle { vm.service.testNodes(listOf(505));vm.service.speedTest(505) }
             compose.waitUntil(10000) { vm.service.testingNodes.value.isNotEmpty() && vm.service.speedResult.value.isNotBlank() && !JSONObject(vm.service.speedResult.value).optBoolean("done") }
             val manager=compose.activity.getSystemService(android.content.Context.ACTIVITY_SERVICE) as android.app.ActivityManager
-            val bg=manager.runningAppProcesses.first { it.processName=="com.zane.zanebox:bg" }
+            val bg=manager.runningAppProcesses.first { it.processName=="${compose.activity.packageName}:bg" }
             android.os.Process.killProcess(bg.pid)
             compose.waitUntil(15000) { vm.service.testingNodes.value.isEmpty() && JSONObject(vm.service.speedResult.value).optBoolean("done") }
             assertTrue(JSONObject(vm.service.speedResult.value).getString("error").contains("服务已断开"))

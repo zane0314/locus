@@ -19,11 +19,13 @@ class RuntimeConfigTest {
         assertEquals(com.zane.zanebox.core.RouteMath.subtract(keep,emptyList()),com.zane.zanebox.core.RouteMath.subtract(keep,prefixes))
         assertTrue(root.getJSONObject("dns").getJSONArray("servers").toString().contains("fc00::/18"))
     }
-    @Test fun homeAutoUsesEnabledGroupsAndSleepsAfterIdleWithoutTestingManualSelection() {
+    @Test fun homeAutoUsesEnabledGroupsAndFollowsUrlTestPreferences() {
         val data=base.copy(nodes=listOf(node,node.copy(id=2,groupId=2),node.copy(id=3,groupId=3)),groups=listOf(Group(1,"local"),Group(2,"sub","https://example.test"),Group(3,"off",enabled=false)),settings=mapOf("homeAutoSelect" to "true"))
         fun out(d:AppData):List<JSONObject> { val a=JSONObject(ConfigBuilder.build(d)).getJSONArray("outbounds");return (0 until a.length()).map { a.getJSONObject(it) } }
         val auto=out(data).single { it.optString("tag")=="home-auto" }
-        assertEquals("urltest",auto.getString("type"));assertEquals("10m",auto.getString("interval"));assertEquals("10m",auto.getString("idle_timeout"));assertEquals(30,auto.getInt("tolerance"))
+        assertEquals("urltest",auto.getString("type"));assertEquals("5m",auto.getString("interval"));assertFalse(auto.has("idle_timeout"));assertEquals(5,auto.getInt("tolerance"))
+        val custom=out(data.copy(settings=data.settings+mapOf("urlTestInterval" to "10m","urlTestTolerance" to "30"))).single { it.optString("tag")=="home-auto" }
+        assertEquals("10m",custom.getString("interval"));assertEquals(30,custom.getInt("tolerance"))
         assertEquals(listOf("node-1","node-2"),(0 until auto.getJSONArray("outbounds").length()).map { auto.getJSONArray("outbounds").getString(it) })
         assertEquals("home-auto",out(data).single { it.optString("tag")=="proxy" }.getString("default"))
         assertFalse(out(base).any { it.optString("tag")=="home-auto" })

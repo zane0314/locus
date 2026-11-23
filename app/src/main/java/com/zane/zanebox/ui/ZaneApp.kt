@@ -146,7 +146,7 @@ internal fun homeRuntimeSnapshots(source:Flow<RuntimeSnapshot>)=source.distinctU
     val exportFile=rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("text/plain")){it?.let { uri->vm.export(uri,exportGroup) }}
     fun exportNodes(groupId:Long?) {if(data.nodes.none { groupId==null || it.groupId==groupId }){vm.message.value="没有可导出的节点";return};exportGroup=groupId;exportFile.launch("locus-nodes.txt")}
     val backupFile=rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/zip")){it?.let{uri->vm.backup(uri,backupScope)}}
-    val restoreFile=rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()){it?.let {uri->confirm="恢复备份将替换当前全部配置，是否继续？" to {vm.restore(uri)}}}
+    val restoreFile=rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()){it?.let(vm::readText)}
     val addActions=listOf("扫码导入" to {scan.launch(com.journeyapps.barcodescanner.ScanOptions().setDesiredBarcodeFormats(com.journeyapps.barcodescanner.ScanOptions.QR_CODE).setPrompt("扫描节点二维码").setBeepEnabled(false))},
         "从剪贴板导入" to {val cb=context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager;vm.importText(cb.primaryClip?.getItemAt(0)?.coerceToText(context)?.toString().orEmpty(),data.browseGroupId)},
         "从文件导入" to {importFile.launch(arrayOf("*/*"))},"手动添加" to {nodeForm()},
@@ -286,7 +286,8 @@ internal fun homeRuntimeSnapshots(source:Flow<RuntimeSnapshot>)=source.distinctU
                     when(page) {
                         0->{
                             if(homeGroupId==0L && search.isBlank())item {
-                                UiCard { UiRow("自动选择",data.nodes.firstOrNull{it.id==autoNodeId}?.let { t("当前：%s · 每 10 分钟测速",it.name) } ?: "选择延迟最低的可用节点 · 每 10 分钟测速",Icons.Outlined.AutoMode,onClick=if(activeNodes.any{JSONObject(it.outbound).optString("type")!="custom"})({vm.service.selectAuto()})else null,modifier=Modifier.testTag("home_auto"),chevron=false,trailing={RadioButton(data.bool("homeAutoSelect"),onClick={vm.service.selectAuto()},enabled=activeNodes.any{JSONObject(it.outbound).optString("type")!="custom"})}) }
+                                val intervalLabel=when(val iv=data.setting("urlTestInterval")){"1m"->t("1 分钟");"5m"->t("5 分钟");"10m"->t("10 分钟");"30m"->t("30 分钟");else->iv}
+                                UiCard { UiRow("自动选择",data.nodes.firstOrNull{it.id==autoNodeId}?.let { t("当前：%s · 每 %s 测速",it.name,intervalLabel) } ?: t("选择延迟最低的可用节点 · 每 %s 测速",intervalLabel),Icons.Outlined.AutoMode,translateSubtitle=false,onClick=if(activeNodes.any{JSONObject(it.outbound).optString("type")!="custom"})({vm.service.selectAuto()})else null,modifier=Modifier.testTag("home_auto"),chevron=false,trailing={RadioButton(data.bool("homeAutoSelect"),onClick={vm.service.selectAuto()},enabled=activeNodes.any{JSONObject(it.outbound).optString("type")!="custom"})}) }
                             }
                             if(selectingNodes && nodes.isNotEmpty())item {
                                 NodeSelectionBar(selectingNodes,selectedNodes.size,"home",{selectingNodes=!selectingNodes;selectedNodes=emptySet()},{selectedNodes=nodes.map{it.id}.toSet()},{deleteNodes(selectedNodes)})

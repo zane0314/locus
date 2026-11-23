@@ -4,115 +4,130 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.ServiceConnection
+import android.os.Binder
+import android.os.DeadObjectException
 import android.os.IBinder
+import android.os.Looper
 import android.os.ParcelFileDescriptor
+import android.os.RemoteException
+import android.util.Log
 import java.io.Closeable
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
-import java.util.concurrent.atomic.AtomicReference
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * Bound AIDL client for `:extraMain` / `:extraTest` extra-kernel processes.
- * Uses separate bind serialization (`bindLock`) and fast state synchronization (`stateLock`)
- * so Main-Thread ServiceConnection callbacks never deadlock against `latch.await()`.
+ * Enforces off-main-thread connection, clears calling identity on FD protection,
+ * and waits for process exit on `close()` so consecutive runs always get a fresh process.
  */
 class ExtraCoreClient(
     private val context: Context,
     private val serviceClass: Class<out ExtraCoreService>,
     private val protectFd: ((Int) -> Boolean)? = null,
+    private val onUnexpectedLost: (() -> Unit)? = null,
 ) : Closeable {
-    private val bindLock = Any()
-    private val stateLock = Any()
+    private val generation = AtomicLong()
     @Volatile
     private var service: IExtraCore? = null
+    @Volatile
+    private var closing = false
     private var connection: ServiceConnection? = null
+    private var deathLatch: CountDownLatch? = null
+
+    private val protectorStub = protectFd?.let { cb ->
+        object : IExtraCoreProtect.Stub() {
+            override fun protect(fd: ParcelFileDescriptor?): Boolean {
+                val pfd = fd ?: return false
+                val caller = Binder.clearCallingIdentity()
+                return try {
+                    pfd.use { cb(it.fd) }
+                } catch (e: Exception) {
+                    Log.w("LinksExtraCore", "附加内核套接字保护失败", e)
+                    false
+                } finally {
+                    Binder.restoreCallingIdentity(caller)
+                }
+            }
+        }
+    }
 
     private fun ensureBound(): IExtraCore {
         service?.let { return it }
-        synchronized(bindLock) {
-            service?.let { return it }
-            val latch = CountDownLatch(1)
-            val boundRef = AtomicReference<IExtraCore?>(null)
-            lateinit var conn: ServiceConnection
-            conn = object : ServiceConnection {
-                override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
-                    val iface = IExtraCore.Stub.asInterface(binder)
-                    synchronized(stateLock) {
-                        if (connection === conn) {
-                            service = iface
+        check(Looper.myLooper() != Looper.getMainLooper()) { "附加内核必须在后台线程连接" }
+        if (connection != null) {
+            close()
+        }
+        closing = false
+        val gen = generation.incrementAndGet()
+        val connectLatch = CountDownLatch(1)
+        val procDeathLatch = CountDownLatch(1)
+        deathLatch = procDeathLatch
+        val conn = object : ServiceConnection {
+            override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
+                try {
+                    if (binder != null && !closing && generation.get() == gen) {
+                        binder.linkToDeath({
+                            procDeathLatch.countDown()
+                            if (generation.get() == gen) {
+                                service = null
+                                if (!closing) {
+                                    onUnexpectedLost?.invoke()
+                                }
+                            }
+                        }, 0)
+                        if (binder.isBinderAlive) {
+                            service = IExtraCore.Stub.asInterface(binder)
                         }
                     }
-                    boundRef.set(iface)
-                    latch.countDown()
+                } catch (_: RemoteException) {
+                    procDeathLatch.countDown()
+                } finally {
+                    connectLatch.countDown()
                 }
+            }
 
-                override fun onServiceDisconnected(name: ComponentName?) {
-                    detachConnection(conn)
-                    latch.countDown()
+            override fun onServiceDisconnected(name: ComponentName?) {
+                if (generation.get() == gen) {
+                    service = null
                 }
+                connectLatch.countDown()
+            }
 
-                override fun onBindingDied(name: ComponentName?) {
-                    detachConnection(conn)
-                    latch.countDown()
-                }
+            override fun onBindingDied(name: ComponentName?) {
+                onServiceDisconnected(name)
             }
-            val staleConn = synchronized(stateLock) {
-                val prev = connection
-                connection = conn
-                service = null
-                prev
+
+            override fun onNullBinding(name: ComponentName?) {
+                connectLatch.countDown()
             }
-            if (staleConn != null) {
-                runCatching { context.unbindService(staleConn) }
-            }
+        }
+        connection = conn
+        try {
             val intent = Intent(context, serviceClass)
-            val ok = context.bindService(intent, conn, Context.BIND_AUTO_CREATE or Context.BIND_IMPORTANT)
-            if (!ok) {
-                detachConnection(conn)
-                error("无法绑定外核服务 ${serviceClass.simpleName}")
+            if (!context.bindService(intent, conn, Context.BIND_AUTO_CREATE)) {
+                error("附加内核服务连接失败")
             }
-            if (!latch.await(10, TimeUnit.SECONDS)) {
-                detachConnection(conn)
-                error("连接外核服务超时")
+            if (!connectLatch.await(15, TimeUnit.SECONDS)) {
+                error("附加内核服务连接超时")
             }
-            return boundRef.get() ?: run {
-                detachConnection(conn)
-                error("外核服务连接失败")
-            }
+            return service ?: error("附加内核服务不可用")
+        } catch (t: Throwable) {
+            close()
+            throw t
         }
     }
 
-    private fun detachConnection(target: ServiceConnection) {
-        val shouldUnbind = synchronized(stateLock) {
-            if (connection === target) {
-                connection = null
-                service = null
-                true
-            } else {
-                false
-            }
-        }
-        if (shouldUnbind) {
-            runCatching { context.unbindService(target) }
-        }
-    }
-
+    @Synchronized
     fun validate(kind: String, config: String) {
         val err = ensureBound().validate(kind, config)
-        if (err.isNotBlank()) throw IllegalArgumentException(err)
+        if (err.isNotBlank()) throw IllegalArgumentException("$kind 配置校验失败：$err")
     }
 
+    @Synchronized
     fun start(kind: String, config: String) {
-        val protector = protectFd?.let { cb ->
-            object : IExtraCoreProtect.Stub() {
-                override fun protect(fd: ParcelFileDescriptor?): Boolean {
-                    val pfd = fd ?: return false
-                    return pfd.use { cb(it.fd) }
-                }
-            }
-        }
-        val err = ensureBound().start(kind, config, protector)
-        if (err.isNotBlank()) throw IllegalStateException(err)
+        val err = ensureBound().start(kind, config, protectorStub)
+        if (err.isNotBlank()) throw IllegalStateException("$kind 启动失败：$err")
     }
 
     fun stop() {
@@ -120,17 +135,35 @@ class ExtraCoreClient(
         runCatching { svc.stop() }
     }
 
+    @Synchronized
     fun version(kind: String): String = runCatching { ensureBound().version(kind) }.getOrDefault("")
 
+    @Synchronized
     override fun close() {
-        val (svc, conn) = synchronized(stateLock) {
-            val s = service
-            val c = connection
-            service = null
-            connection = null
-            s to c
+        closing = true
+        generation.incrementAndGet()
+        val svc = service
+        service = null
+        val waitDeath = deathLatch
+        val conn = connection
+        connection = null
+        deathLatch = null
+        try {
+            if (svc != null) {
+                try {
+                    svc.stop()
+                } catch (_: DeadObjectException) {
+                }
+            }
+        } finally {
+            if (conn != null) {
+                runCatching { context.unbindService(conn) }
+            }
+            if (svc != null && waitDeath != null) {
+                if (!waitDeath.await(5, TimeUnit.SECONDS)) {
+                    error("附加内核进程退出超时")
+                }
+            }
         }
-        if (svc != null) runCatching { svc.stop() }
-        if (conn != null) runCatching { context.unbindService(conn) }
     }
 }

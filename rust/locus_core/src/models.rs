@@ -174,6 +174,7 @@ pub fn setting_default(key: &str) -> &'static str {
         "rulesUpdateInterval" => "24h",
         "urlTestInterval" => "5m",
         "urlTestTolerance" => "5",
+        "autoTestPowerMode" => "normal",
         "fragmentLength" => "100-200",
         "fragmentInterval" => "10-20",
         "dnsRemote" => "https://1.1.1.1/dns-query",
@@ -635,7 +636,7 @@ impl AppData {
         let mut selectors: HashSet<String> = self
             .groups
             .iter()
-            .map(|g| format!("group-{}", g.id))
+            .flat_map(|g| [format!("group-{}", g.id), format!("smart-group-{}", g.id)])
             .collect();
         for m in &self.merges {
             selectors.insert(format!("merge-{}", m.id));
@@ -691,6 +692,8 @@ fn is_ascii_digits(s: &str) -> bool {
 
 fn is_selector_tag(tag: &str) -> bool {
     if let Some(rest) = tag.strip_prefix("group-") {
+        is_ascii_digits(rest)
+    } else if let Some(rest) = tag.strip_prefix("smart-group-") {
         is_ascii_digits(rest)
     } else if let Some(rest) = tag.strip_prefix("merge-") {
         is_ascii_digits(rest)

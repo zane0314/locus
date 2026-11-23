@@ -138,4 +138,114 @@ hysteria2://pw@hy2.example.com:443?sni=hy2.example.com&insecure=1&obfs=salamande
         .unwrap();
         assert_eq!(backed.groups.len(), 2);
     }
+
+    #[test]
+    fn hybrid_ninja_smart_group_and_power_mode() {
+        use crate::runtime_logic::{active_url_test_groups, target_plan_create};
+
+        let clash_missing_srv = "proxies:\n  - name: bad\n    type: ninja\n    port: 443\n    tls: true\n";
+        let err = parse_report(clash_missing_srv).unwrap_err();
+        assert!(err.contains("Ninja 节点缺少服务器"), "got: {err}");
+
+        let clash_mixed = "\
+proxies:
+  - name: VLESS-1
+    type: vless
+    server: 1.2.3.4
+    port: 443
+    uuid: 11111111-1111-1111-1111-111111111111
+    tls: true
+    servername: vless.example.com
+  - name: Ninja-1
+    type: ninja
+    server: ninja.example.com
+    port: 443
+    method: aes-128-gcm
+    password: userpw
+    node_password: node.example.com
+    pass: false
+    tls: true
+    servername: ninja.example.com
+";
+        let report = parse_report(clash_mixed).unwrap();
+        assert_eq!(report.nodes.len(), 2);
+
+        let mut data = AppData {
+            groups: vec![Group {
+                id: 1,
+                name: "Mixed".into(),
+                subscription_url: "https://sub.example.com".into(),
+                enabled: true,
+                order: 0,
+                updated_at: 0,
+                user_info: String::new(),
+                front_proxy: 0,
+                landing_proxy: 0,
+                options: "{}".into(),
+            }],
+            nodes: vec![
+                Node {
+                    id: 10,
+                    group_id: 1,
+                    name: report.nodes[0].name.clone(),
+                    outbound: report.nodes[0].outbound.clone(),
+                    share_link: report.nodes[0].share_link.clone(),
+                    ping: 30,
+                    tx: 0,
+                    rx: 0,
+                    order: 0,
+                    status: 0,
+                    metadata: report.nodes[0].metadata.clone(),
+                },
+                Node {
+                    id: 11,
+                    group_id: 1,
+                    name: report.nodes[1].name.clone(),
+                    outbound: report.nodes[1].outbound.clone(),
+                    share_link: report.nodes[1].share_link.clone(),
+                    ping: 25,
+                    tx: 0,
+                    rx: 0,
+                    order: 1,
+                    status: 0,
+                    metadata: report.nodes[1].metadata.clone(),
+                },
+            ],
+            ..AppData::default()
+        };
+        data.settings.insert("selectedNodeId".into(), "11".into());
+        data.settings.insert("selectedGroupId".into(), "1".into());
+        data.settings.insert("proxyCore".into(), CORE_XRAY.into());
+        data.settings.insert("autoTestPowerMode".into(), "saving".into());
+        data.settings.insert("smart.ai.target".into(), "group:1".into());
+        data.settings.insert("smartRules.ai".into(), "DOMAIN-SUFFIX,openai.com".into());
+        validate_app_data(&data, None).unwrap();
+
+        let main_cfg = build_config(&data, Purpose::Main, 0, "sec", None).unwrap();
+        let mut port = 23000u16;
+        let plan = plan_extra_core_with_allocator(&main_cfg, &mut || {
+            let cur = port;
+            port += 1;
+            Ok(cur)
+        })
+        .unwrap()
+        .unwrap();
+        let sb: Value = serde_json::from_str(&plan.sing_box_config).unwrap();
+        let outs = sb["outbounds"].as_array().unwrap();
+        assert!(outs.iter().any(|o| o["tag"] == "node-10" && o["type"] == "socks"));
+        assert!(outs.iter().any(|o| o["tag"] == "node-11" && o["type"] == "ninja"));
+        assert!(outs.iter().any(|o| o["tag"] == "smart-group-1" && o["type"] == "urltest"));
+
+        let active_ut = active_url_test_groups(&plan.sing_box_config).unwrap();
+        assert!(active_ut.contains(&"smart-group-1".to_string()));
+
+        let tplan = target_plan_create(&data, "group:1", "ai").unwrap();
+        assert_eq!(tplan.group.as_ref().unwrap().tag, "smart-group-1");
+        assert!(tplan.group.as_ref().unwrap().url_test);
+
+        // Single-node test on Ninja while proxyCore is Xray returns None cleanly
+        let ninja_test_cfg = build_config(&data, Purpose::Test, 11, "", None).unwrap();
+        let ninja_plan = plan_extra_core_with_allocator(&ninja_test_cfg, &mut || Ok(24000)).unwrap();
+        assert!(ninja_plan.is_none());
+    }
 }

@@ -106,6 +106,9 @@ pub fn validate_app_data(data: &AppData, previous: Option<&AppData>) -> Result<(
     if sel_group != 0 && !group_ids.contains(&sel_group) {
         return Err("默认节点组不存在".to_string());
     }
+    if !matches!(data.setting("autoTestPowerMode"), "normal" | "saving") {
+        return Err("自动测速模式无效".to_string());
+    }
     Ok(())
 }
 

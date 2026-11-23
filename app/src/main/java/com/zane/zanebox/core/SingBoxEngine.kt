@@ -44,6 +44,16 @@ class SingBoxEngine(private val platform:NativePlatform) {
     /** Applies this round's delays (0 = failed) to a live URLTest group and returns its new strict choice, or "". */
     fun applyURLTestResults(groupTag:String,results:Map<String,Int>):String =
         main?.applyURLTestResults(groupTag,results.entries.joinToString("\n") { "${it.key}\t${it.value}" }) ?: ""
+    /** Applies auto URLTest delays using the group's configured tolerance, returning the active tag or "". */
+    fun applyAutoURLTestResults(groupTag:String,results:Map<String,Int>):String =
+        main?.applyAutoURLTestResults(groupTag,results.entries.joinToString("\n") { "${it.key}\t${it.value}" }) ?: ""
+    fun urlTestTouch(groupTag:String) { main?.urlTestTouch(groupTag) }
+    fun urlTestDueIn(groupTag:String):Long = main?.urlTestDueIn(groupTag) ?: -1L
+    fun urlTestIdleFor(groupTag:String):Long = main?.urlTestIdleFor(groupTag) ?: -1L
+    fun urlTestInFlight(groupTag:String):Boolean = main?.urlTestInFlight(groupTag) ?: false
+    fun urlTestIfDue(groupTag:String,idleLimitMs:Long):Boolean = main?.urlTestIfDue(groupTag,idleLimitMs) ?: false
+    fun urlTestRoundInfo(groupTag:String):String = main?.urlTestRoundInfo(groupTag).orEmpty()
+    fun closeIdleConnections() { main?.closeIdleConnections() }
     fun resetNetwork()=Libcore.resetAllConnections(true)
     fun sleep() { main?.sleep() }
     fun wake() { main?.wake() }
@@ -54,8 +64,9 @@ class SingBoxEngine(private val platform:NativePlatform) {
         test(config,url,timeout,prepared={ resolved=it },active=active)
         return resolved
     }
-    fun test(config:String,url:String,timeout:Int,prepared:(String)->Unit={},frontDelays:MutableMap<String,Int>?=null,active:()->Boolean={true}):Int {
+    fun test(config:String,url:String,timeout:Int,prepared:(String)->Unit={},frontDelays:MutableMap<String,Int>?=null,singleAttempt:Boolean=false,active:()->Boolean={true}):Int {
         if(!active())throw kotlinx.coroutines.CancellationException("测速已取消")
+        fun runUrlTest(targetBox:BoxInstance):Int = if(singleAttempt) Libcore.urlTestSingle(targetBox,url,timeout) else Libcore.urlTest(targetBox,url,timeout)
         val root=org.json.JSONObject(config)
         val plans=com.zane.zanebox.runtime.ChainProbePlan.read(config)
         val frontKeys=if(frontDelays!=null)com.zane.zanebox.runtime.chainProbeKeys(config)else emptyMap()
@@ -79,7 +90,7 @@ class SingBoxEngine(private val platform:NativePlatform) {
                 for(probe in listOfNotNull(plan.front,plan.landing)) {
                     val winner=com.zane.zanebox.runtime.chooseChainProbe(probe,{ tag->
                         check(box.selectOutbound(tag)) { "代理链测速候选无法选择" }
-                        fun measure()=try { Libcore.urlTest(box,url,timeout) } catch(e:Exception) { if(!active())throw kotlinx.coroutines.CancellationException("测速已取消");-1 }
+                        fun measure()=try { runUrlTest(box) } catch(e:Exception) { if(!active())throw kotlinx.coroutines.CancellationException("测速已取消");-1 }
                         if(probe==plan.front && frontDelays!=null) synchronized(frontDelays) {
                             frontDelays.getOrPut(frontKeys.getValue(tag)) { measure() }
                         } else measure()
@@ -90,7 +101,7 @@ class SingBoxEngine(private val platform:NativePlatform) {
             }
             if(plans.isNotEmpty())check(box.selectOutbound(original)) { "代理链测速默认节点无法恢复" }
             prepared(root.toString())
-            Libcore.urlTest(box,url,timeout)
+            runUrlTest(box)
         } finally { try {runCatching {owned.close()}} finally {tests.remove(owned)} }
     }
     fun cancelTests() { val snapshot=synchronized(tests) { tests.toList() };snapshot.forEach { runCatching { it.close() } } }

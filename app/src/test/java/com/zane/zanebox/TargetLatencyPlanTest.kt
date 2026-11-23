@@ -24,6 +24,7 @@ class TargetLatencyPlanTest {
         assertEquals(TargetGroup("merge-10",false,10),TargetPlan.resolveGroup(base,"merge:10",""))
         assertEquals(TargetGroup("merge-11",true,11),TargetPlan.resolveGroup(base,"merge:11",""))
         assertEquals(TargetGroup("group-1",false),TargetPlan.resolveGroup(base,"group:1",""))
+        assertEquals(TargetGroup("smart-group-1",true),TargetPlan.resolveGroup(base.copy(settings=base.settings+("smart.ai.target" to "group:1")),"group:1","ai"))
         assertEquals(TargetGroup("smart-ai",true),TargetPlan.resolveGroup(base,"auto","ai"))
         assertNull(TargetPlan.resolveGroup(base,"auto",""))
         // groupIsSelector=false only limits a group to one member; it is still a selector, never URLTest.

@@ -83,7 +83,15 @@ class ZaneRuntime(private val owner:Service,private val vpn:VpnService?):Context
     private var subscriptionUpdates:Job?=null
     @Volatile private var destroyed=false
     private var ownsSubscriptionAlarm=false
+    private var ownsAutoTestAlarm=false
+    private var inexactAlarmWarned=false
+    @Volatile private var activeUrlTestGroups:Set<String> = emptySet()
+    @Volatile private var managedUrlTestGroups:Set<String> = emptySet()
+    private val lastLoggedRoundSeq=ConcurrentHashMap<String,Long>()
+    private val managedDueAtMs=ConcurrentHashMap<String,Long>()
+    private var autoTestJob:Job?=null
     private val subscriptionAlarm by lazy { PendingIntent.getBroadcast(this,2,Intent("$packageName.SUBSCRIPTION_UPDATE").setPackage(packageName).addFlags(Intent.FLAG_RECEIVER_FOREGROUND),PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE) }
+    private val autoTestAlarm by lazy { PendingIntent.getBroadcast(this,3,Intent("$packageName.AUTO_TEST").setPackage(packageName).addFlags(Intent.FLAG_RECEIVER_FOREGROUND),PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE) }
     private var stunJob:Job?=null
     private val stunAccess=Mutex()
     @Volatile private var stunVersion=0L
@@ -107,7 +115,11 @@ class ZaneRuntime(private val owner:Service,private val vpn:VpnService?):Context
     private var wakeLock:android.os.PowerManager.WakeLock?=null
     private val wakeReceiver=object:BroadcastReceiver() {
         override fun onReceive(context:Context,intent:Intent) {
-            if(intent.action==Intent.ACTION_SCREEN_ON && current.get().connectionState==RuntimeState.CONNECTED)dispatch("wakeReset","")
+            if(intent.action==Intent.ACTION_SCREEN_ON && current.get().connectionState==RuntimeState.CONNECTED) {
+                dispatch("wakeReset","")
+                afterReady {onScreenOnAutoTest()}
+            }
+            if(intent.action=="$packageName.AUTO_TEST")onAutoTestAlarm()
             if(intent.action=="$packageName.SUBSCRIPTION_UPDATE")afterReady {checkSubscriptionUpdates()}
             if(intent.action==android.os.PowerManager.ACTION_DEVICE_IDLE_MODE_CHANGED)afterReady {access.withLock {syncIdle()}}
         }
@@ -129,8 +141,17 @@ class ZaneRuntime(private val owner:Service,private val vpn:VpnService?):Context
                 if(id!=null && node!=null) scope.launch { store.update { d -> d.copy(merges=d.merges.map { if(it.id==id) it.copy(selectedId=node) else it }) };event("message","分流组选择已更新") }
             }
         }
-        engine=MultiCoreEngine(this,platform,vpn?.let { service -> { fd -> service.protect(fd) } })
-        androidx.core.content.ContextCompat.registerReceiver(this,wakeReceiver,IntentFilter(Intent.ACTION_SCREEN_ON).apply{addAction("$packageName.SUBSCRIPTION_UPDATE");addAction(android.os.PowerManager.ACTION_DEVICE_IDLE_MODE_CHANGED)},androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED)
+        engine=MultiCoreEngine(this,platform,vpn?.let { service -> { fd -> service.protect(fd) } },onExtraCoreLost={
+            afterReady {
+                access.withLock {
+                    if(current.get().connectionState==RuntimeState.CONNECTED) {
+                        stopCore()
+                        event("message","附加内核服务中断，连接已关闭")
+                    }
+                }
+            }
+        })
+        androidx.core.content.ContextCompat.registerReceiver(this,wakeReceiver,IntentFilter(Intent.ACTION_SCREEN_ON).apply{addAction("$packageName.SUBSCRIPTION_UPDATE");addAction("$packageName.AUTO_TEST");addAction(android.os.PowerManager.ACTION_DEVICE_IDLE_MODE_CHANGED)},androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED)
         val initialization=resources.initialize {
             access.withLock {
                 currentCoroutineContext().ensureActive();store.reload();currentCoroutineContext().ensureActive();platform.initialize();currentCoroutineContext().ensureActive()
@@ -321,6 +342,7 @@ class ZaneRuntime(private val owner:Service,private val vpn:VpnService?):Context
         }
         if(automatic && next==appliedConfig) {
             applyLiveSettings(incoming);appliedData=incoming
+            armAutoTestAlarm()
             event("message","设置已应用，无需重启");return true
         }
         stopCore(terminal=false,syncSelection=false)
@@ -352,7 +374,7 @@ class ZaneRuntime(private val owner:Service,private val vpn:VpnService?):Context
             currentCoroutineContext().ensureActive()
             val restoreWarnings=restoreTargetChoices(config)
             applyLiveSettings(data,running=true)
-            appliedData=data;appliedConfig=config;syncIdle()
+            appliedData=data;appliedConfig=config;prepareAutoTestState(config);syncIdle()
             lastProxySelection=engine.configuredProxyDefault;lastAutoNode=0;event("autoSelection","0")
             sessionTx=0;sessionRx=0
             val inbounds=JSONObject(config).optJSONArray("inbounds") ?: JSONArray()
@@ -362,6 +384,7 @@ class ZaneRuntime(private val owner:Service,private val vpn:VpnService?):Context
             publish(snapshot);notification("已连接")
             startSampler(snapshot.generation)
             startChainTests(snapshot.generation,config,data)
+            armAutoTestAlarm()
             armSubscriptionAlarm()
             startRuleUpdates()
             val warnings=ConfigBuilder.targetWarnings(data)+restoreWarnings
@@ -400,11 +423,13 @@ class ZaneRuntime(private val owner:Service,private val vpn:VpnService?):Context
     }
     private fun failed(error:Exception) {
         releaseWakeLock()
+        cancelAutoTestAlarm();autoTestJob?.cancel();autoTestJob=null
         sampler?.cancel();chainTests?.cancel();chainSelectionState="{}";event("chainSelections","{}");ruleUpdates?.cancel();runCatching { engine.close() }
         publish(RuntimeSnapshot(state=RuntimeState.FAILED.code,generation=current.get().generation,error=safeError(error)),appliedData ?: store.data.value)
         foregroundStop()
     }
     private fun stopCore(terminal:Boolean=true,syncSelection:Boolean=true) {
+        cancelAutoTestAlarm();autoTestJob?.cancel();autoTestJob=null
         if(terminal)subscriptionUpdates?.cancel()
         releaseWakeLock()
         if(current.get().connectionState==RuntimeState.STOPPED) { if(terminal) {cancelSubscriptionAlarm();foregroundStop();owner.stopSelf()};return }
@@ -487,6 +512,8 @@ class ZaneRuntime(private val owner:Service,private val vpn:VpnService?):Context
                     syncDefaultSelection(data,selections)
                     val traffic=engine.trackedTags.associateWith { tag -> engine.query(tag,"uplink").coerceAtLeast(0) to engine.query(tag,"downlink").coerceAtLeast(0) }
                     val (tx,rx)=recordTraffic(data,traffic,selections)
+                    touchActiveUrlTestGroups(data,traffic,selections)
+                    syncUrlTestRounds(data)
                     publish(current.get().copy(txRate=tx*1000/duration,rxRate=rx*1000/duration,txTotal=sessionTx,rxTotal=sessionRx),data)
                     notification("↑ ${tx*1000/duration} B/s  ↓ ${rx*1000/duration} B/s",rate=true,data=data)
                     connections?.let {try {this@ZaneRuntime.traffic.sampleConnections(it)} catch(e:Exception) {if(!statsError){event("message","连接统计解析失败：${safeError(e)}");statsError=true}}}
@@ -503,7 +530,7 @@ class ZaneRuntime(private val owner:Service,private val vpn:VpnService?):Context
         return recordTraffic(data,traffic,selections)
     }
     private fun readSelections(data:AppData):JSONObject {
-        if(!data.bool("statsEnabled") && !data.bool("clashApi") && !data.bool("homeAutoSelect") && ChainProbePlan.read(appliedConfig ?: "{}").isEmpty())return JSONObject()
+        if(!data.bool("statsEnabled") && !data.bool("clashApi") && !data.bool("homeAutoSelect") && activeUrlTestGroups.isEmpty() && ChainProbePlan.read(appliedConfig ?: "{}").isEmpty())return JSONObject()
         val chainTags=ChainProbePlan.read(appliedConfig ?: "{}").flatMap { listOfNotNull(it.front,it.landing).map { p->p.tag } }.toSet()
         val result=JSONObject();val pending=java.util.ArrayDeque(engine.trackedTags+"proxy"+chainTags);val seen=HashSet<String>()
         while(pending.isNotEmpty()) {
@@ -608,7 +635,8 @@ class ZaneRuntime(private val owner:Service,private val vpn:VpnService?):Context
                         val results=parent.members.associateWith {if(active())measure(it)else 0}
                         access.withLock {
                             if(active()) {
-                                val chosen=engine.applyURLTestResults(parent.tag,results)
+                                val chosen=engine.applyAutoURLTestResults(parent.tag,results)
+                                managedDueAtMs[parent.tag]=SystemClock.elapsedRealtime()+urlTestIntervalMs(data)
                                 selections.put(parent.tag,chosen);chainSelectionState=selections.toString();event("chainSelections",chainSelectionState)
                             }
                         }
@@ -821,11 +849,17 @@ class ZaneRuntime(private val owner:Service,private val vpn:VpnService?):Context
         stunJob=scope.launch {
             try { stunAccess.withLock {
                 ensureActive()
-                val result=Libcore.stunTest(server)
+                val result=suspendCancellableCoroutine { cont ->
+                    // Libcore.stunTest blocks on UDP socket timeouts; keep it off RuntimeResources' joinable scope.
+                    Dispatchers.IO.dispatch(kotlin.coroutines.EmptyCoroutineContext) {
+                        try { val value=Libcore.stunTest(server);if(cont.isActive)cont.resumeWith(Result.success(value)) }
+                        catch(t:Throwable) { if(cont.isActive)cont.resumeWith(Result.failure(t)) }
+                    }
+                }
                 ensureActive()
-                if(stunVersion==version)event("stun",JSONObject().put("running",false).put("success",result.success).put("text",result.text.take(16384)).toString())
+                if(!destroyed && stunVersion==version)event("stun",JSONObject().put("running",false).put("success",result.success).put("text",result.text.take(16384)).toString())
             } } catch(e:CancellationException) { throw e }
-            catch(e:Exception) { if(stunVersion==version)event("stun",JSONObject().put("running",false).put("error",safeError(e)).toString()) }
+            catch(e:Exception) { if(!destroyed && stunVersion==version)event("stun",JSONObject().put("running",false).put("error",safeError(e)).toString()) }
         }
     }
     private suspend fun queryIp() {
@@ -874,6 +908,133 @@ class ZaneRuntime(private val owner:Service,private val vpn:VpnService?):Context
             }.minOrNull() ?: Long.MAX_VALUE
             delay(wait)
         } }
+    }
+    private fun urlTestIntervalMs(data:AppData):Long {
+        val interval=data.setting("urlTestInterval","5m")
+        val count=interval.takeWhile {it.isDigit()}.toLongOrNull() ?: 5L
+        val multiplier=when(interval.dropWhile {it.isDigit()}) {"ms"->1L;"s"->1000L;"h"->3600000L;else->60000L}
+        return (count.coerceAtMost(Long.MAX_VALUE/multiplier)*multiplier).coerceAtLeast(1000L)
+    }
+    private fun prepareAutoTestState(config:String) {
+        activeUrlTestGroups=SamplingPolicy.activeUrlTestGroups(config)
+        managedUrlTestGroups=chainParentProbes(config).mapTo(LinkedHashSet()) {it.tag}.intersect(activeUrlTestGroups)
+        lastLoggedRoundSeq.clear()
+        managedDueAtMs.clear()
+        inexactAlarmWarned=false
+    }
+    private fun urlTestGroupDueIn(tag:String):Long =
+        if(tag in managedUrlTestGroups)(managedDueAtMs[tag]?.minus(SystemClock.elapsedRealtime()) ?: 0L).coerceAtLeast(0L)
+        else engine.urlTestDueIn(tag)
+    @Synchronized private fun cancelAutoTestAlarm() {
+        if(ownsAutoTestAlarm){getSystemService(android.app.AlarmManager::class.java).cancel(autoTestAlarm);ownsAutoTestAlarm=false}
+    }
+    @Synchronized private fun armAutoTestAlarm() {
+        val data=appliedData
+        if(destroyed || data==null || data.setting("autoTestPowerMode")!="normal" || current.get().connectionState!=RuntimeState.CONNECTED || activeUrlTestGroups.isEmpty()) {
+            cancelAutoTestAlarm();return
+        }
+        val nextDelay=activeUrlTestGroups.map {urlTestGroupDueIn(it)}.filter {it>=0L}.minOrNull()
+        if(nextDelay==null) {cancelAutoTestAlarm();return}
+        val alarms=getSystemService(android.app.AlarmManager::class.java)
+        val triggerAt=SystemClock.elapsedRealtime()+maxOf(nextDelay,500L)
+        var exact=Build.VERSION.SDK_INT<31 || alarms.canScheduleExactAlarms()
+        try {
+            if(exact)alarms.setExactAndAllowWhileIdle(android.app.AlarmManager.ELAPSED_REALTIME_WAKEUP,triggerAt,autoTestAlarm)
+            else alarms.setAndAllowWhileIdle(android.app.AlarmManager.ELAPSED_REALTIME_WAKEUP,triggerAt,autoTestAlarm)
+        } catch(_:SecurityException) {
+            alarms.setAndAllowWhileIdle(android.app.AlarmManager.ELAPSED_REALTIME_WAKEUP,triggerAt,autoTestAlarm)
+            exact=false
+        }
+        if(!exact && !inexactAlarmWarned) {
+            inexactAlarmWarned=true
+            event("message","系统未允许精确闹钟，后台测速可能延迟")
+            android.util.Log.i("LinksAutoTest","alarm=inexact mode=normal")
+        }
+        ownsAutoTestAlarm=true
+    }
+    @Synchronized private fun onAutoTestAlarm() {
+        ownsAutoTestAlarm=false
+        val data=appliedData ?: return
+        if(destroyed || data.setting("autoTestPowerMode")!="normal" || current.get().connectionState!=RuntimeState.CONNECTED)return
+        if(autoTestJob?.isActive==true)return
+        val hasDue=activeUrlTestGroups.any {tag -> urlTestGroupDueIn(tag)==0L || (tag !in managedUrlTestGroups && engine.urlTestInFlight(tag))}
+        if(!hasDue) {armAutoTestAlarm();return}
+        val token=current.get().generation
+        val lock=power.newWakeLock(android.os.PowerManager.PARTIAL_WAKE_LOCK,"zanebox:auto-test").apply {setReferenceCounted(false);acquire(90_000L)}
+        val job=scope.launch(start=CoroutineStart.LAZY) {withRuntimeReady(ready) {runDueAutoTests(token,idleLimitMs=0L)}}
+        autoTestJob=job
+        job.invokeOnCompletion {
+            if(lock.isHeld)lock.release()
+            synchronized(this@ZaneRuntime) {if(autoTestJob===job)autoTestJob=null}
+            armAutoTestAlarm()
+        }
+        job.start()
+    }
+    private suspend fun onScreenOnAutoTest() {
+        val data=appliedData ?: return
+        if(data.setting("autoTestPowerMode")=="normal") {armAutoTestAlarm();return}
+        if(activeUrlTestGroups.any {urlTestGroupDueIn(it)==0L}) {
+            runDueAutoTests(current.get().generation,idleLimitMs=0L)
+            armAutoTestAlarm()
+        }
+    }
+    private fun touchActiveUrlTestGroups(data:AppData,traffic:Map<String,Pair<Long,Long>>,selections:JSONObject) {
+        val touched=LinkedHashSet<String>()
+        traffic.forEach { (tag,bytes) ->
+            if(bytes.first<=0L && bytes.second<=0L)return@forEach
+            var currentTag=tag
+            val seen=HashSet<String>()
+            while(currentTag.isNotBlank() && seen.add(currentTag)) {
+                if(currentTag in activeUrlTestGroups) {
+                    engine.urlTestTouch(currentTag)
+                    touched.add(currentTag)
+                }
+                currentTag=selections.optJSONObject(currentTag)?.optString("now").orEmpty()
+            }
+        }
+        if(touched.isEmpty() || data.setting("autoTestPowerMode")!="saving")return
+        if(touched.any {urlTestGroupDueIn(it)==0L} && autoTestJob?.isActive!=true) {
+            val token=current.get().generation
+            val job=scope.launch {runDueAutoTests(token,idleLimitMs=0L,onlyTags=touched)}
+            autoTestJob=job
+            job.invokeOnCompletion {synchronized(this@ZaneRuntime) {if(autoTestJob===job)autoTestJob=null}}
+        }
+    }
+    private fun syncUrlTestRounds(data:AppData) {
+        val mode=data.setting("autoTestPowerMode")
+        for(tag in activeUrlTestGroups) {
+            if(tag in managedUrlTestGroups)continue
+            val parts=engine.urlTestRoundInfo(tag).split(',')
+            if(parts.size!=5)continue
+            val seq=parts[0].toLongOrNull() ?: continue
+            if(seq<=(lastLoggedRoundSeq[tag] ?: 0L))continue
+            val startBootMs=parts[1].toLongOrNull() ?: continue
+            val durationMs=parts[2].toLongOrNull() ?: continue
+            val success=parts[3].toIntOrNull() ?: continue
+            val total=parts[4].toIntOrNull() ?: continue
+            lastLoggedRoundSeq[tag]=seq
+            val startElapsed=SystemClock.elapsedRealtime()-startBootMs
+            val failedCount=(total-success).coerceAtLeast(0)
+            android.util.Log.i("LinksAutoTest","mode=$mode group=$tag startElapsed=$startElapsed durationMs=$durationMs success=$success failed=$failedCount")
+        }
+    }
+    private suspend fun runDueAutoTests(token:Long,idleLimitMs:Long,onlyTags:Set<String>?=null) {
+        val data=access.withLock {
+            if(current.get().connectionState!=RuntimeState.CONNECTED || current.get().generation!=token)return
+            appliedData ?: return
+        }
+        val targets=activeUrlTestGroups.filter {it !in managedUrlTestGroups && (onlyTags==null || it in onlyTags)}
+        var triggered=false
+        for(tag in targets) {if(engine.urlTestIfDue(tag,idleLimitMs))triggered=true}
+        if(triggered || targets.any {engine.urlTestInFlight(it)}) {
+            val deadline=SystemClock.elapsedRealtime()+com.zane.zanebox.data.SettingDefaults.testTimeout(data.setting("testTimeout"))+2000L
+            while(SystemClock.elapsedRealtime()<deadline && targets.any {engine.urlTestInFlight(it)})delay(150)
+        }
+        access.withLock {
+            if(current.get().connectionState==RuntimeState.CONNECTED && current.get().generation==token) {
+                appliedData?.let {syncUrlTestRounds(it)}
+            }
+        }
     }
     @Synchronized private fun cancelSubscriptionAlarm() {
         if(ownsSubscriptionAlarm){getSystemService(android.app.AlarmManager::class.java).cancel(subscriptionAlarm);ownsSubscriptionAlarm=false}
@@ -978,7 +1139,7 @@ class ZaneRuntime(private val owner:Service,private val vpn:VpnService?):Context
         commands.close();callbacks.kill()
         // Cancellation and synchronous native close may block; neither runs on onDestroy's caller.
         resources.close(
-            cancelNative={synchronized(testStateLock) {activeTestBatch=0L};engine.cancelTests();speed?.cancel();cancelSubscriptionAlarm()},
+            cancelNative={synchronized(testStateLock) {activeTestBatch=0L};autoTestJob?.cancel();stunJob?.cancel();engine.cancelTests();speed?.cancel();cancelAutoTestAlarm();cancelSubscriptionAlarm()},
             cleanup={try {access.withLock {cleanupCore()}} catch(e:Exception) {android.util.Log.e("LinksRuntime","runtime cleanup failed",e);throw e}})
     }
     private fun cleanupCore() {

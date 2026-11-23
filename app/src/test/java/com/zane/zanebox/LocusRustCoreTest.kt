@@ -121,4 +121,63 @@ class LocusRustCoreTest {
         val emptyTls = strayTls.replace("""{"server_name":"a.com"}""", "{}")
         assertNotNull(MultiCorePlanner.plan(emptyTls))
     }
+
+    @Test fun multiCorePreservesNinjaInHybridXrayMihomoAndPureNinjaTestPlans() {
+        val parsed = SubscriptionParser.parseReport(
+            """
+            proxies:
+              - name: VLESS-Edge
+                type: vless
+                server: 1.2.3.4
+                port: 443
+                uuid: 11111111-1111-1111-1111-111111111111
+                tls: true
+                servername: vless.example.test
+              - name: Ninja-Edge
+                type: ninja
+                server: ninja.example.test
+                port: 443
+                method: aes-128-gcm
+                password: fixture-outer
+                node_password: node.example.test
+                pass: false
+                tls: true
+                servername: ninja.example.test
+            """.trimIndent(),
+        )
+        assertEquals(2, parsed.nodes.size)
+        val group = Group(1, "Hybrid", "https://example.test/sub")
+        val vlessNode = Node(10, 1, parsed.nodes[0].name, parsed.nodes[0].outbound)
+        val ninjaNode = Node(11, 1, parsed.nodes[1].name, parsed.nodes[1].outbound)
+        val base = AppData(
+            nodes = listOf(vlessNode, ninjaNode),
+            groups = listOf(group),
+            settings = mapOf(
+                "selectedNodeId" to "11",
+                "selectedGroupId" to "1",
+                "autoTestPowerMode" to "saving",
+                "smart.ai.target" to "group:1",
+                "smartRules.ai" to "DOMAIN-SUFFIX,openai.com",
+            ),
+        )
+
+        for (core in listOf("xray", "mihomo")) {
+            val mainCfg = ConfigBuilder.build(base.copy(settings = base.settings + ("proxyCore" to core)), Purpose.MAIN)
+            val plan = MultiCorePlanner.plan(mainCfg)
+            assertNotNull("Expected hybrid plan for $core", plan)
+            assertEquals(core, plan!!.kind)
+            val sbOutbounds = JSONObject(plan.singBoxConfig).getJSONArray("outbounds")
+            val byTag = (0 until sbOutbounds.length()).map { sbOutbounds.getJSONObject(it) }.associateBy { it.getString("tag") }
+            assertEquals("socks", byTag.getValue("node-10").getString("type"))
+            assertEquals("ninja", byTag.getValue("node-11").getString("type"))
+            assertEquals("urltest", byTag.getValue("smart-group-1").getString("type"))
+            assertTrue(com.zane.zanebox.runtime.SamplingPolicy.activeUrlTestGroups(plan.singBoxConfig).contains("smart-group-1"))
+
+            // Single-node latency test on Ninja while proxyCore is xray/mihomo bypasses extra-core cleanly
+            val ninjaTestCfg = ConfigBuilder.build(base.copy(settings = base.settings + ("proxyCore" to core)), Purpose.TEST, testNodeId = 11)
+            assertNull(MultiCorePlanner.plan(ninjaTestCfg))
+            val stripped = MultiCorePlanner.withCoreKind(ninjaTestCfg, MultiCorePlanner.CORE_SING_BOX)
+            assertFalse(JSONObject(stripped).has("links_experimental_core"))
+        }
+    }
 }

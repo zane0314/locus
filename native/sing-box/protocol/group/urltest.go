@@ -2,6 +2,7 @@ package group
 
 import (
 	"context"
+	"fmt"
 	"maps"
 	"net"
 	"sync"
@@ -221,6 +222,13 @@ type URLTestGroup struct {
 	close                        chan struct{}
 	started                      bool
 	lastActive                   common.TypedValue[time.Time]
+	lastActiveNs                 atomic.Int64
+	lastRoundAt                  atomic.Int64
+	roundSeq                     atomic.Uint64
+	roundStartMs                 atomic.Int64
+	roundDurationMs              atomic.Int64
+	roundSuccess                 atomic.Int32
+	roundTotal                   atomic.Int32
 	managedTest                  bool
 }
 
@@ -259,6 +267,7 @@ func NewURLTestGroup(ctx context.Context, outboundManager adapter.OutboundManage
 }
 
 func (g *URLTestGroup) PostStart() {
+	g.lastActiveNs.Store(int64(elapsedBootTime()))
 	if g.managedTest {
 		return
 	}
@@ -270,6 +279,7 @@ func (g *URLTestGroup) PostStart() {
 }
 
 func (g *URLTestGroup) Touch() {
+	g.lastActiveNs.Store(int64(elapsedBootTime()))
 	if g.managedTest {
 		return
 	}
@@ -390,19 +400,118 @@ func (g *URLTestGroup) URLTest(ctx context.Context) (map[string]uint16, error) {
 }
 
 func (g *URLTestGroup) urlTest(ctx context.Context, force bool) (map[string]uint16, error) {
+	result, _, err := g.urlTestRound(ctx, force)
+	return result, err
+}
+
+func countLeafOutbounds(outboundManager adapter.OutboundManager, outbounds []adapter.Outbound, seen map[string]bool) int {
+	total := 0
+	for _, detour := range outbounds {
+		if detour == nil {
+			continue
+		}
+		tag := detour.Tag()
+		if seen[tag] {
+			continue
+		}
+		seen[tag] = true
+		switch nested := detour.(type) {
+		case *URLTest:
+			if nested.group != nil {
+				total += countLeafOutbounds(outboundManager, nested.group.outbounds, seen)
+			}
+		case adapter.OutboundGroup:
+			members := common.FilterNotNil(common.Map(nested.All(), func(it string) adapter.Outbound {
+				member, _ := outboundManager.Outbound(it)
+				return member
+			}))
+			total += countLeafOutbounds(outboundManager, members, seen)
+		default:
+			total++
+		}
+	}
+	return total
+}
+
+func (g *URLTestGroup) urlTestRound(ctx context.Context, force bool) (map[string]uint16, bool, error) {
 	if g.managedTest {
-		return make(map[string]uint16), nil
+		return make(map[string]uint16), false, nil
 	}
 	if unified, configured := urltest.UnifiedDelayPolicy(g.ctx); configured {
 		ctx = urltest.WithUnifiedDelay(ctx, unified)
 	}
 	if g.checking.Swap(true) {
-		return make(map[string]uint16), nil
+		return make(map[string]uint16), false, nil
 	}
 	defer g.checking.Store(false)
+	startBoot := elapsedBootTime()
 	result := URLTestOutbounds(ctx, g.outbound, g.history, g.logger, g.outbounds, g.link, g.interval, force)
 	g.performUpdateCheck()
-	return result, nil
+	endBoot := elapsedBootTime()
+	durationMs := (endBoot - startBoot).Milliseconds()
+	if durationMs < 0 {
+		durationMs = 0
+	}
+	total := countLeafOutbounds(g.outbound, g.outbounds, make(map[string]bool))
+	success := 0
+	for _, delay := range result {
+		if delay > 0 {
+			success++
+		}
+	}
+	if success > total {
+		total = success
+	}
+	g.access.Lock()
+	g.lastRoundAt.Store(int64(endBoot))
+	g.roundStartMs.Store(startBoot.Milliseconds())
+	g.roundDurationMs.Store(durationMs)
+	g.roundSuccess.Store(int32(success))
+	g.roundTotal.Store(int32(total))
+	g.roundSeq.Add(1)
+	g.access.Unlock()
+	return result, true, nil
+}
+
+func (g *URLTestGroup) idleFor() time.Duration {
+	last := g.lastActiveNs.Load()
+	if last <= 0 {
+		return 0
+	}
+	idle := elapsedBootTime() - time.Duration(last)
+	if idle < 0 {
+		return 0
+	}
+	return idle
+}
+
+func (g *URLTestGroup) dueIn() time.Duration {
+	if g.checking.Load() {
+		return g.interval
+	}
+	last := g.lastRoundAt.Load()
+	if last <= 0 {
+		return 0
+	}
+	elapsed := elapsedBootTime() - time.Duration(last)
+	if elapsed >= g.interval {
+		return 0
+	}
+	return g.interval - elapsed
+}
+
+func (g *URLTestGroup) urlTestIfDue(ctx context.Context, idleLimit time.Duration) bool {
+	if g.managedTest {
+		return false
+	}
+	if idleLimit > 0 && g.idleFor() > idleLimit {
+		return false
+	}
+	if g.dueIn() > 0 {
+		return false
+	}
+	_, ran, err := g.urlTestRound(ctx, true)
+	return ran && err == nil
 }
 
 type urlTestResult struct {
@@ -540,6 +649,14 @@ func (g *URLTestGroup) performUpdateCheck() {
 // the UDP choice when TCP is unchanged and has no success, or "" if nothing
 // succeeded.
 func (g *URLTestGroup) ApplyTestResults(results map[string]uint16) string {
+	return g.applyTestResults(results, 0)
+}
+
+func (g *URLTestGroup) ApplyAutoTestResults(results map[string]uint16) string {
+	return g.applyTestResults(results, g.tolerance)
+}
+
+func (g *URLTestGroup) applyTestResults(results map[string]uint16, tolerance uint16) string {
 	g.updateAccess.Lock()
 	defer g.updateAccess.Unlock()
 	now := time.Now()
@@ -555,6 +672,7 @@ func (g *URLTestGroup) ApplyTestResults(results map[string]uint16) string {
 			g.history.StoreURLTestHistory(tag, &adapter.URLTestHistory{Time: now, Delay: delay})
 		}
 	}
+	g.lastRoundAt.Store(int64(elapsedBootTime()))
 	var chosen string
 	var updated bool
 	pick := func(network string, selected *common.TypedValue[adapter.Outbound]) {
@@ -573,7 +691,16 @@ func (g *URLTestGroup) ApplyTestResults(results map[string]uint16) string {
 		if best == nil {
 			return
 		}
-		if previous := selected.Load(); previous != nil && previous != best {
+		previous := selected.Load()
+		if tolerance > 0 && previous != nil && common.Contains(previous.Network(), network) {
+			if prevDelay := results[previous.Tag()]; prevDelay > 0 && uint32(prevDelay) <= uint32(bestDelay)+uint32(tolerance) {
+				if chosen == "" || network == N.NetworkTCP {
+					chosen = previous.Tag()
+				}
+				return
+			}
+		}
+		if previous != nil && previous != best {
 			updated = true
 		}
 		selected.Store(best)
@@ -595,4 +722,65 @@ func (s *URLTest) ApplyTestResults(results map[string]uint16) string {
 		return ""
 	}
 	return s.group.ApplyTestResults(results)
+}
+
+func (s *URLTest) ApplyAutoTestResults(results map[string]uint16) string {
+	if s.group == nil {
+		return ""
+	}
+	return s.group.ApplyAutoTestResults(results)
+}
+
+func (s *URLTest) TouchForTraffic() {
+	if s.group != nil {
+		s.group.Touch()
+	}
+}
+
+func (s *URLTest) URLTestDueIn() time.Duration {
+	if s.group == nil {
+		return -1
+	}
+	return s.group.dueIn()
+}
+
+func (s *URLTest) URLTestIdleFor() time.Duration {
+	if s.group == nil {
+		return -1
+	}
+	return s.group.idleFor()
+}
+
+func (s *URLTest) URLTestInFlight() bool {
+	return s.group != nil && s.group.checking.Load()
+}
+
+func (s *URLTest) URLTestIfDue(ctx context.Context, idleLimit time.Duration) bool {
+	if s.group == nil {
+		return false
+	}
+	if ctx == nil {
+		ctx = s.ctx
+	}
+	return s.group.urlTestIfDue(ctx, idleLimit)
+}
+
+func (s *URLTest) URLTestRoundInfo() string {
+	if s.group == nil {
+		return ""
+	}
+	s.group.access.Lock()
+	defer s.group.access.Unlock()
+	seq := s.group.roundSeq.Load()
+	if seq == 0 {
+		return ""
+	}
+	return fmt.Sprintf(
+		"%d,%d,%d,%d,%d",
+		seq,
+		s.group.roundStartMs.Load(),
+		s.group.roundDurationMs.Load(),
+		s.group.roundSuccess.Load(),
+		s.group.roundTotal.Load(),
+	)
 }
