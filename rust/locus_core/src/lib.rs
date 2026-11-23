@@ -248,4 +248,165 @@ proxies:
         let ninja_plan = plan_extra_core_with_allocator(&ninja_test_cfg, &mut || Ok(24000)).unwrap();
         assert!(ninja_plan.is_none());
     }
+
+    #[test]
+    fn smart_panel_summary_matches_individual_helpers() {
+        use crate::models::MergeGroup;
+        use crate::route_rules::{smart_policy_keys, smart_target};
+        use crate::runtime_logic::{
+            smart_lowest_node, smart_panel_summary, smart_target_node_ids, target_latency_label,
+        };
+        use std::collections::HashSet;
+
+        let mut data = AppData {
+            groups: vec![
+                Group {
+                    id: 1,
+                    name: "SubA".into(),
+                    subscription_url: "https://example.test/a".into(),
+                    enabled: true,
+                    order: 0,
+                    updated_at: 0,
+                    user_info: String::new(),
+                    front_proxy: 0,
+                    landing_proxy: 0,
+                    options: "{}".into(),
+                },
+                Group {
+                    id: 2,
+                    name: "LocalB".into(),
+                    subscription_url: String::new(),
+                    enabled: true,
+                    order: 1,
+                    updated_at: 0,
+                    user_info: String::new(),
+                    front_proxy: 0,
+                    landing_proxy: 0,
+                    options: "{}".into(),
+                },
+                Group {
+                    id: 3,
+                    name: "DisabledC".into(),
+                    subscription_url: "https://example.test/c".into(),
+                    enabled: false,
+                    order: 2,
+                    updated_at: 0,
+                    user_info: String::new(),
+                    front_proxy: 0,
+                    landing_proxy: 0,
+                    options: "{}".into(),
+                },
+            ],
+            nodes: vec![
+                Node {
+                    id: 1,
+                    group_id: 1,
+                    name: "HK-1".into(),
+                    outbound: r#"{"type":"socks","server":"127.0.0.1","server_port":10001}"#.into(),
+                    share_link: String::new(),
+                    ping: 90,
+                    tx: 0,
+                    rx: 0,
+                    order: 0,
+                    status: 3,
+                    metadata: "{}".into(),
+                },
+                Node {
+                    id: 2,
+                    group_id: 1,
+                    name: "HK-2".into(),
+                    outbound: r#"{"type":"socks","server":"127.0.0.1","server_port":10002}"#.into(),
+                    share_link: String::new(),
+                    ping: 60,
+                    tx: 0,
+                    rx: 0,
+                    order: 1,
+                    status: 3,
+                    metadata: "{}".into(),
+                },
+                Node {
+                    id: 3,
+                    group_id: 2,
+                    name: "Local-Fast".into(),
+                    outbound: r#"{"type":"socks","server":"127.0.0.1","server_port":10003}"#.into(),
+                    share_link: String::new(),
+                    ping: 20,
+                    tx: 0,
+                    rx: 0,
+                    order: 2,
+                    status: 3,
+                    metadata: "{}".into(),
+                },
+                Node {
+                    id: 4,
+                    group_id: 1,
+                    name: "CustomOutbound".into(),
+                    outbound: r#"{"type":"custom"}"#.into(),
+                    share_link: String::new(),
+                    ping: 5,
+                    tx: 0,
+                    rx: 0,
+                    order: 3,
+                    status: 3,
+                    metadata: "{}".into(),
+                },
+                Node {
+                    id: 5,
+                    group_id: 3,
+                    name: "Disabled-Fast".into(),
+                    outbound: r#"{"type":"socks","server":"127.0.0.1","server_port":10005}"#.into(),
+                    share_link: String::new(),
+                    ping: 1,
+                    tx: 0,
+                    rx: 0,
+                    order: 4,
+                    status: 3,
+                    metadata: "{}".into(),
+                },
+            ],
+            merges: vec![MergeGroup {
+                id: 10,
+                name: "M1".into(),
+                node_ids: vec![1, 3],
+                group_ids: vec![],
+                mode: "urltest".into(),
+                selected_id: 1,
+            }],
+            ..AppData::default()
+        };
+        data.settings.insert("selectedNodeId".into(), "1".into());
+        data.settings.insert("smart.speed.target".into(), "auto".into());
+        data.settings.insert("smart.youtube.target".into(), "group:1".into());
+        data.settings.insert("smart.netflix.target".into(), "merge:10".into());
+        data.settings.insert("smart.x.target".into(), "node:2".into());
+        data.settings.insert("smart.telegram.target".into(), "direct".into());
+        data.settings.insert("smart.disney.target".into(), "off".into());
+        data.settings.insert("smartRules.custom".into(), "DOMAIN,example.test".into());
+        data.settings.insert("smartCustom.c1.name".into(), "PayPal".into());
+        data.settings.insert("smart.c1.target".into(), "group:2".into());
+        data.settings.insert("smartPolicyOrder".into(), "youtube\nspeed\nc1".into());
+
+        for testing in [HashSet::new(), HashSet::from([2i64])] {
+            let summary = smart_panel_summary(&data, &testing);
+            assert_eq!(summary.policy_order, smart_policy_keys(&data));
+            assert_eq!(summary.auto_node_count, smart_target_node_ids(&data, "auto").len());
+            assert_eq!(summary.policies.len(), summary.policy_order.len());
+            for item in &summary.policies {
+                let expected_target = smart_target(&data, &item.key);
+                assert_eq!(item.target, expected_target, "key={}", item.key);
+                assert_eq!(
+                    item.lowest_node,
+                    smart_lowest_node(&data, &expected_target, &testing),
+                    "lowestNode key={}",
+                    item.key
+                );
+                assert_eq!(
+                    item.latency_label,
+                    target_latency_label(&data, &expected_target, &testing),
+                    "latencyLabel key={}",
+                    item.key
+                );
+            }
+        }
+    }
 }

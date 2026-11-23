@@ -23,8 +23,8 @@ use crate::runtime_logic::{
     active_url_test_groups, chain_parent_probes, chain_probe_keys, node_test_label,
     parse_traffic_samples, read_chain_probe_plans, reorder_visible_ids,
     restorable_selector_choices, routed_chain_nodes, sampling_tracked_tags, saved_choice_delay,
-    smart_lowest_node, smart_target_node_ids, target_latency_label, target_plan_create,
-    target_plan_create_batch, traffic_domain,
+    smart_lowest_node, smart_panel_summary, smart_target_node_ids, target_latency_label,
+    target_plan_create, target_plan_create_batch, traffic_domain,
 };
 use crate::share_uri::{hysteria_hop_interval, percent_decode, socks_user_info, ShareUri};
 use crate::subscription_ops::{
@@ -647,6 +647,15 @@ fn dispatch(op: &str, body: &str) -> Result<Value, String> {
                 Some(v) => serde_json::from_value(v.clone()).map_err(|e| e.to_string())?,
             };
             Ok(json!(smart_lowest_node(&data, value, &testing)))
+        }
+        "smartPanelSummary" => {
+            let req = parse_req(body)?;
+            let data = req_app_data(&req, "data")?;
+            let testing: HashSet<i64> = match req.get("testing") {
+                Some(Value::Null) | None => HashSet::new(),
+                Some(v) => serde_json::from_value(v.clone()).map_err(|e| e.to_string())?,
+            };
+            Ok(json!(smart_panel_summary(&data, &testing)))
         }
 
         other => Err(format!("未知 RustCore 操作: {other}")),

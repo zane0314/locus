@@ -1,6 +1,6 @@
 use crate::chain_routing::effective_chain_targets;
-use crate::models::{AppData, Group, Node};
-use crate::route_rules::{normalize_smart_target, smart_target};
+use crate::models::{AppData, Group, MergeGroup, Node};
+use crate::route_rules::{normalize_smart_target, smart_policy_keys, smart_target};
 use indexmap::{IndexMap, IndexSet};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -1187,4 +1187,182 @@ pub fn smart_lowest_node(
         }
     }
     best.map(|n| n.name.clone())
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct SmartPolicyItemSummary {
+    pub key: String,
+    pub target: String,
+    #[serde(rename = "lowestNode")]
+    pub lowest_node: Option<String>,
+    #[serde(rename = "latencyLabel")]
+    pub latency_label: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct SmartPanelSummary {
+    #[serde(rename = "policyOrder")]
+    pub policy_order: Vec<String>,
+    #[serde(rename = "autoNodeCount")]
+    pub auto_node_count: usize,
+    pub policies: Vec<SmartPolicyItemSummary>,
+}
+
+fn summarize_members(
+    members: &[&Node],
+    testing: &HashSet<i64>,
+    include_lowest: bool,
+) -> (Option<String>, Option<String>) {
+    if members.is_empty() {
+        return (None, None);
+    }
+    if members.iter().any(|n| testing.contains(&n.id)) {
+        return (None, Some("测试中".to_string()));
+    }
+    let mut best: Option<&Node> = None;
+    let mut any_failed = false;
+    for &n in members {
+        if n.status != 1 && n.ping > 0 {
+            if best.is_none_or(|b| n.ping < b.ping) {
+                best = Some(n);
+            }
+        }
+        if n.status == 1 || n.ping == -2 {
+            any_failed = true;
+        }
+    }
+    if let Some(node) = best {
+        (
+            if include_lowest {
+                Some(node.name.clone())
+            } else {
+                None
+            },
+            Some(format!("{} ms", node.ping)),
+        )
+    } else if any_failed {
+        (None, Some("失败".to_string()))
+    } else {
+        (None, Some("未测试".to_string()))
+    }
+}
+
+/// Single-pass summary for the Smart Routing page so scrolling performs zero JNI calls.
+pub fn smart_panel_summary(data: &AppData, testing: &HashSet<i64>) -> SmartPanelSummary {
+    let policy_order = smart_policy_keys(data);
+    let enabled_groups: HashSet<i64> = data
+        .groups
+        .iter()
+        .filter(|g| g.enabled)
+        .map(|g| g.id)
+        .collect();
+    let sub_groups: HashSet<i64> = data
+        .groups
+        .iter()
+        .filter(|g| g.enabled && !g.subscription_url.trim().is_empty())
+        .map(|g| g.id)
+        .collect();
+    let active: Vec<&Node> = data
+        .nodes
+        .iter()
+        .filter(|n| {
+            enabled_groups.contains(&n.group_id)
+                && serde_json::from_str::<Value>(&n.outbound)
+                    .ok()
+                    .and_then(|v| v.get("type").and_then(Value::as_str).map(|s| s != "custom"))
+                    .unwrap_or(true)
+        })
+        .collect();
+
+    let mut auto_members: Vec<&Node> = Vec::new();
+    let mut active_by_id: HashMap<i64, &Node> = HashMap::with_capacity(active.len());
+    let mut active_by_group: HashMap<i64, Vec<&Node>> = HashMap::new();
+    for &n in &active {
+        if sub_groups.contains(&n.group_id) {
+            auto_members.push(n);
+        }
+        active_by_id.insert(n.id, n);
+        active_by_group.entry(n.group_id).or_default().push(n);
+    }
+    let auto_node_count = auto_members.len();
+    let merges_by_id: HashMap<i64, &MergeGroup> = data.merges.iter().map(|m| (m.id, m)).collect();
+    let selected_id = data.selected_node_id();
+    let proxy_members: Vec<&Node> = {
+        let selected: Vec<&Node> = active
+            .iter()
+            .copied()
+            .filter(|n| n.id == selected_id)
+            .collect();
+        if selected.is_empty() {
+            active.iter().copied().take(1).collect()
+        } else {
+            selected
+        }
+    };
+
+    let mut target_cache: HashMap<String, (Option<String>, Option<String>)> = HashMap::new();
+    let mut policies = Vec::with_capacity(policy_order.len());
+
+    for key in &policy_order {
+        let target = smart_target(data, key);
+        let (lowest_node, latency_label) = if let Some(cached) = target_cache.get(&target) {
+            cached.clone()
+        } else {
+            let choice = normalize_smart_target(&target);
+            let computed = if choice == "auto" {
+                summarize_members(&auto_members, testing, true)
+            } else if let Some(rest) = choice.strip_prefix("node:") {
+                if let Some(&n) = rest.parse::<i64>().ok().and_then(|id| active_by_id.get(&id)) {
+                    summarize_members(&[n], testing, false)
+                } else {
+                    (None, None)
+                }
+            } else if let Some(rest) = choice.strip_prefix("group:") {
+                if let Some(members) = rest
+                    .parse::<i64>()
+                    .ok()
+                    .and_then(|id| active_by_group.get(&id))
+                {
+                    summarize_members(members, testing, true)
+                } else {
+                    (None, None)
+                }
+            } else if let Some(rest) = choice.strip_prefix("merge:") {
+                if let Some(merge) = rest
+                    .parse::<i64>()
+                    .ok()
+                    .and_then(|id| merges_by_id.get(&id))
+                {
+                    let node_ids: HashSet<i64> = merge.node_ids.iter().copied().collect();
+                    let group_ids: HashSet<i64> = merge.group_ids.iter().copied().collect();
+                    let members: Vec<&Node> = active
+                        .iter()
+                        .copied()
+                        .filter(|n| node_ids.contains(&n.id) || group_ids.contains(&n.group_id))
+                        .collect();
+                    summarize_members(&members, testing, true)
+                } else {
+                    (None, None)
+                }
+            } else if choice == "proxy" {
+                summarize_members(&proxy_members, testing, false)
+            } else {
+                (None, None)
+            };
+            target_cache.insert(target.clone(), computed.clone());
+            computed
+        };
+        policies.push(SmartPolicyItemSummary {
+            key: key.clone(),
+            target,
+            lowest_node,
+            latency_label,
+        });
+    }
+
+    SmartPanelSummary {
+        policy_order,
+        auto_node_count,
+        policies,
+    }
 }

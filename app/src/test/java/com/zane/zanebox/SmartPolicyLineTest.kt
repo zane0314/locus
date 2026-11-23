@@ -1,8 +1,12 @@
 package com.zane.zanebox
 
+import com.zane.zanebox.config.ConfigBuilder
+import com.zane.zanebox.config.smartPolicyKeys
+import com.zane.zanebox.config.smartTarget
 import com.zane.zanebox.data.*
 import com.zane.zanebox.ui.smartLatencyLabel
 import com.zane.zanebox.ui.smartLowestNode
+import com.zane.zanebox.ui.smartPanelSummary
 import org.junit.Assert.*
 import org.junit.Test
 
@@ -69,6 +73,34 @@ class SmartPolicyLineTest {
             val label=smartLatencyLabel(base.copy(nodes=base.nodes.map { if(it.id==3L)it.copy(ping=60,status=3) else it }),target,emptySet())!!
             assertTrue(label,Regex("\\d+ ms").matches(label))
             assertFalse(label,label.contains("组内最低") || label.contains("最低"))
+        }
+    }
+
+    @Test fun batchedSmartPanelSummaryMatchesIndividualHelpers() {
+        val data=base.copy(
+            settings=base.settings+mapOf(
+                "smart.speed.target" to "direct",
+                "smart.netflix.target" to "off",
+                "smart.google.target" to "proxy",
+                "smartRules.youtube" to "DOMAIN-SUFFIX,youtube.com\n".repeat(200),
+                "smartRules.custom" to "DOMAIN,custom.example.test",
+                "smartCustom.c1.name" to "PayPal",
+                "smart.c1.target" to "merge:10",
+                "smartPolicyOrder" to "youtube\nc1\nai\nx",
+            ),
+        )
+        for(testing in listOf(emptySet(),setOf(1L))) {
+            val summary=smartPanelSummary(data,testing)
+            assertEquals(smartPolicyKeys(data),summary.policyOrder)
+            assertEquals(ConfigBuilder.smartTargetNodeIds(data,"auto").size,summary.autoNodeCount)
+            assertEquals(summary.policyOrder.toSet(),summary.policies.keys)
+            for(key in summary.policyOrder) {
+                val expectedTarget=smartTarget(data,key)
+                val row=summary.policies.getValue(key)
+                assertEquals(key,expectedTarget,row.target)
+                assertEquals(key,smartLowestNode(data,expectedTarget,testing),row.lowestNode)
+                assertEquals(key,smartLatencyLabel(data,expectedTarget,testing),row.latencyLabel)
+            }
         }
     }
 }
