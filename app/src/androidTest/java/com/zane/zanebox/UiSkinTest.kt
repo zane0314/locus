@@ -40,7 +40,7 @@ class UiSkinThemeTest {
             compose.waitForIdle()
             assertEquals(if(skin in listOf("prism","linear","claude","supabase","miro"))skin else "prism",resolved)
             assertEquals(when(skin) {
-                "linear"->Color(0xFFF5F6F8); "claude"->Color(0xFFFAF9F5)
+                "linear"->Color(0xFF010102); "claude"->Color(0xFFFAF9F5)
                 "supabase"->Color(0xFF1C1C1C); "miro"->Color.White; else->Color(0xFFEAEBF3)
             },background)
         }
@@ -101,13 +101,19 @@ class UiSkinNavigationTest {
         compose.onNodeWithTag("setting_uiSkin").performClick()
         compose.onNodeWithText("天青留白").assertDoesNotExist()
         compose.onNodeWithText("光谱水晶").assertDoesNotExist()
-        compose.onNodeWithText("简洁留白").performClick()
+        compose.onNodeWithText("深夜线条").performClick()
         compose.waitUntil(10000){vm.data.value.setting("uiSkin")=="linear"}
         compose.onNodeWithTag("page_back").performClick()
         compose.onNodeWithTag("home_tab").performClick()
         compose.onNodeWithTag("white_connection_card").assertIsDisplayed()
         compose.onNodeWithTag("home_toolbar").assertDoesNotExist()
         compose.onNodeWithTag("connect_toggle").assertIsDisplayed().assertIsEnabled()
+        compose.onNodeWithTag("core_switcher").assertIsDisplayed().performClick()
+        compose.onNodeWithTag("core_chip_xray").assertIsDisplayed().performClick()
+        compose.waitUntil(10000){vm.data.value.setting("proxyCore")=="xray"}
+        compose.onNodeWithTag("core_switcher").performClick()
+        compose.onNodeWithTag("core_chip_sing-box").assertIsDisplayed().performClick()
+        compose.waitUntil(10000){vm.data.value.setting("proxyCore")=="sing-box"}
         compose.onNodeWithTag("node_2").performClick()
         compose.waitUntil(10000){vm.data.value.selectedNodeId==2L}
         compose.onNodeWithTag("home_selected_node").assertTextContains("验收节点 2",substring=true)
@@ -153,3 +159,7 @@ class UiSkinNavigationTest {
         assertEquals(2L,vm.data.value.selectedNodeId)
     }
 }
+
+@org.junit.runner.RunWith(org.junit.runners.Suite::class)
+@org.junit.runners.Suite.SuiteClasses(UiSkinThemeTest::class, UiSkinNavigationTest::class)
+class UiSkinTest

@@ -18,7 +18,12 @@ class HomeAutoIpv6Test {
     private fun waitFor(label:String,predicate:()->Boolean) {val until=SystemClock.elapsedRealtime()+30000;while(!predicate()) {if(SystemClock.elapsedRealtime()>until)fail("超时 $label");Thread.sleep(100)}}
     private fun base()=AppData(nodes=listOf(Node(1101,1101,"慢 A","""{"type":"socks","server":"10.0.2.2","server_port":19081}"""),Node(1102,1102,"快 B","""{"type":"socks","server":"10.0.2.2","server_port":19082}"""),Node(1103,1103,"停用","""{"type":"socks","server":"10.0.2.2","server_port":19081}""")),groups=listOf(Group(1101,"本地"),Group(1102,"订阅","https://example.test/sub"),Group(1103,"停用",enabled=false)),settings=mapOf("selectedNodeId" to "1101","selectedGroupId" to "1101","serviceMode" to "proxy","appLanguage" to "zh-CN","sniff" to "false","dnsRemote" to "local","testUrl" to "http://10.0.2.2:19080/test","statsEnabled" to "false"))
     private fun exit():String {val c=URL("http://203.0.113.9:19080/probe").openConnection(Proxy(Proxy.Type.HTTP,InetSocketAddress("127.0.0.1",2080))) as HttpURLConnection;return try {c.connectTimeout=4000;c.readTimeout=4000;c.inputStream.bufferedReader().readText()}finally{c.disconnect()}}
+    private fun setFixtureDelay(aMs:Int,bMs:Int) {
+        val c=URL("http://10.0.2.2:19080/fixture-delay?a=$aMs&b=$bMs").openConnection(Proxy.NO_PROXY) as HttpURLConnection
+        try { c.connectTimeout=3000;c.readTimeout=3000;c.inputStream.use { it.readBytes() } } finally { c.disconnect() }
+    }
     @Test fun homeAutoUsesActualFastestExitPersistsAndManualSelectionStopsIt() {
+        setFixtureDelay(250,10)
         val store=ZaneStore(context);store.replace(base())
         val scenario=ActivityScenario.launch(MainActivity::class.java);val client=ServiceClient(context);client.connect()
         try {
@@ -40,11 +45,11 @@ class HomeAutoIpv6Test {
             } finally {request.disconnect()}
             waitFor("面板切回同一手动节点退出自动"){client.snapshot.value.state==2 && !store.snapshot().bool("homeAutoSelect") && runCatching{exit()=="EXIT_A"}.getOrDefault(false)}
             assertFalse(JSONObject(ConfigBuilder.build(store.snapshot())).getJSONArray("outbounds").toString().contains("home-auto"))
-        } finally {client.stop();waitFor("停止"){client.snapshot.value.state !in 1..3};client.close();scenario.close();store.close()}
+        } finally {runCatching{setFixtureDelay(0,0)};client.stop();waitFor("停止"){client.snapshot.value.state !in 1..3};client.close();scenario.close();store.close()}
     }
     @Test fun ipv6FakeDnsAndLiteralTrafficReachProxyWithLanBypass() {
         val store=ZaneStore(context);store.replace(base().copy(settings=base().settings+mapOf("serviceMode" to "vpn","ipv6" to "true","dnsStrategy" to "ipv6_only","bypassLan" to "true","dnsRemote" to "tcp://10.0.2.2:19087","dnsDirect" to "tcp://10.0.2.2:19087")))
-        ins.uiAutomation.executeShellCommand("appops set com.zane.zanebox ACTIVATE_VPN allow").close()
+        ins.uiAutomation.executeShellCommand("appops set ${context.packageName} ACTIVATE_VPN allow").close()
         val scenario=ActivityScenario.launch(MainActivity::class.java);val client=ServiceClient(context);client.connect()
         try {
             client.start();waitFor("IPv6 VPN连接"){if(client.snapshot.value.state==4)fail(client.snapshot.value.error);client.snapshot.value.state==2}

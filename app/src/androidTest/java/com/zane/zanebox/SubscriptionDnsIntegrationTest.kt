@@ -91,7 +91,7 @@ class SubscriptionDnsIntegrationTest {
         }
     }
     @Test fun specifiedResolverBootstrapUsesThePhysicalNetworkWhileVpnIsActive()=runBlocking {
-        ins.uiAutomation.executeShellCommand("appops set com.zane.zanebox ACTIVATE_VPN allow").use {java.io.FileInputStream(it.fileDescriptor).readBytes()}
+        ins.uiAutomation.executeShellCommand("appops set ${context.packageName} ACTIVATE_VPN allow").use {java.io.FileInputStream(it.fileDescriptor).readBytes()}
         ZaneStore(context).use {store ->
             store.replace(data(mode="vpn",server="10.0.2.2"))
             val client=ServiceClient(context)

@@ -14,7 +14,7 @@ class UiSkinCatalogTest {
         val preferences=preferenceSections(AppData()).flatMap { it.second }
         val skins=preferences.single { it.key=="uiSkin" }.choices
         assertEquals(listOf("prism","linear","claude","supabase","miro"),skins.map { it.first })
-        assertEquals(listOf("棱镜流光","简洁留白","暖纸陶色","深色翡翠","明黄工作台"),skins.map { it.second })
+        assertEquals(listOf("棱镜流光","深夜线条","暖纸陶色","深色翡翠","明黄工作台"),skins.map { it.second })
         assertFalse(preferences.any { it.key=="launcherIcon" })
         assertFalse(preferences.any { it.key=="theme" })
         for((id,name) in skins) {

@@ -27,7 +27,12 @@ class SelectionCacheTest {
         val c=URL("http://127.0.0.1:9090/proxies/proxy").openConnection(Proxy.NO_PROXY) as HttpURLConnection
         try { c.connectTimeout=2000;c.readTimeout=2000;c.requestMethod="PUT";c.doOutput=true;c.setRequestProperty("Authorization","Bearer $secret");c.setRequestProperty("Content-Type","application/json");c.outputStream.use { it.write(JSONObject().put("name","node-$id").toString().toByteArray()) };assertTrue("面板切换失败",c.responseCode in 200..299) } finally { c.disconnect() }
     }
+    private fun setFixtureDelay(aMs:Int,bMs:Int) {
+        val c=URL("http://10.0.2.2:19080/fixture-delay?a=$aMs&b=$bMs").openConnection(Proxy.NO_PROXY) as HttpURLConnection
+        try { c.connectTimeout=3000;c.readTimeout=3000;c.inputStream.use { it.readBytes() } } finally { c.disconnect() }
+    }
     @Test fun automaticPolicyUsesAllEnabledSubscriptionsAndActualFasterExitWithoutChangingHomeSelection() {
+        setFixtureDelay(250,0)
         fun node(id:Long,group:Long,port:Int,ping:Int)=Node(id,group,"节点 $id","""{"type":"socks","server":"10.0.2.2","server_port":$port}""",ping=ping)
         val base=AppData(nodes=listOf(node(701,701,19081,1),node(702,702,19082,9999),node(703,703,19081,0),node(704,704,19082,0)),groups=listOf(Group(701,"订阅 A","https://example.test/a"),Group(702,"订阅 B","https://example.test/b"),Group(703,"本地"),Group(704,"停用订阅","https://example.test/d",enabled=false)),merges=listOf(MergeGroup(705,"旧来源",nodeIds=listOf(703))),settings=mapOf("serviceMode" to "proxy","selectedNodeId" to "701","browseGroupId" to "703","appLanguage" to "zh-CN","smartSourceGroupId" to "701","smartSourceMergeId" to "705","smart.youtube.target" to "auto","smartRules.youtube" to "IP-CIDR,203.0.113.9/32","sniff" to "false","dnsRemote" to "local","testUrl" to "http://10.0.2.2:19080/test","urlTestInterval" to "1s"))
         val store=ZaneStore(context);store.replace(base)
@@ -54,7 +59,7 @@ class SelectionCacheTest {
             }finally{observer.cancel()}
             evidence.put("legacyTargetsUseProxy",true).put("emptySubscriptionsFallback",true)
             File(context.getExternalFilesDir(null),"automatic-subscription-result.json").writeText(evidence.toString())
-        } finally {client.stop();waitFor("自动测试停止") {client.snapshot.value.state !in 1..3};client.close();scenario.close();store.replace(base);store.close()}
+        } finally {runCatching{setFixtureDelay(0,0)};client.stop();waitFor("自动测试停止") {client.snapshot.value.state !in 1..3};client.close();scenario.close();store.replace(base);store.close()}
     }
     @Test fun restoreWinsCachedSelectionAndPanelSelectionUpdatesDatabase() {
         val store=ZaneStore(context)

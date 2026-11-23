@@ -1,5 +1,8 @@
 package com.zane.zanebox.ui
 
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.ui.draw.alpha
@@ -8,11 +11,16 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.AccountTree
+import androidx.compose.material.icons.outlined.ArrowDropDown
 import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material.icons.outlined.Dns
 import androidx.compose.material.icons.outlined.PowerSettingsNew
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.painterResource
@@ -25,6 +33,7 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.viewinterop.AndroidView
@@ -58,15 +67,31 @@ import androidx.compose.ui.viewinterop.AndroidView
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable internal fun HomeGroupChip(text:String,selected:Boolean,onClick:()->Unit,onLongClick:(()->Unit)?=null,active:Boolean=true,modifier:Modifier=Modifier) {
     val linear=skinPalette.name!="prism"
-    val border=if(skinPalette.name=="linear")androidx.compose.foundation.BorderStroke(1.dp,if(selected)skinPrimary.copy(alpha=.7f) else skinDivider) else null
-    Surface(color=if(selected && skinPalette.name=="linear")skinIconTile else if(selected && linear)skinSurfaceElevated else if(selected)MaterialTheme.colorScheme.primaryContainer else if(linear)skinSurface else MaterialTheme.colorScheme.surface,
+    val border=when {
+        !linear -> null
+        selected && skinPalette.name=="miro" -> BorderStroke(1.dp,skinPrimary)
+        selected -> BorderStroke(1.dp,skinPrimary.copy(alpha=.75f))
+        else -> BorderStroke(1.dp,skinDivider)
+    }
+    val containerColor=when {
+        selected && linear -> skinPalette.chipSelectedBg
+        selected -> MaterialTheme.colorScheme.primaryContainer
+        linear -> skinSurface
+        else -> MaterialTheme.colorScheme.surface
+    }
+    val textColor=when {
+        selected && linear -> skinOnSurface
+        linear -> skinSecondaryText
+        else -> MaterialTheme.colorScheme.onSurface
+    }
+    Surface(color=containerColor,
         shape=if(linear)MaterialTheme.shapes.extraSmall else MaterialTheme.shapes.medium,
         border=border,
         modifier=modifier.semantics{this.selected=selected}.alpha(if(active)1f else .45f).combinedClickable(onClick=onClick,onLongClick=onLongClick)) {
-        Box(Modifier.heightIn(min=if(linear)42.dp else 0.dp),contentAlignment=Alignment.Center){
-            Text(text,Modifier.padding(horizontal=14.dp,vertical=9.dp),fontSize=12.sp,lineHeight=16.sp,maxLines=1,
-                color=if(selected && skinPalette.name=="linear")skinOnSurface else if(linear)skinSecondaryText else MaterialTheme.colorScheme.onSurface,
-                fontWeight=if(selected)FontWeight.SemiBold else FontWeight.Normal)
+        Box(Modifier.heightIn(min=if(linear)36.dp else 0.dp),contentAlignment=Alignment.Center){
+            Text(text,Modifier.padding(horizontal=12.dp,vertical=7.dp),fontSize=12.sp,lineHeight=16.sp,maxLines=1,
+                color=textColor,
+                fontWeight=if(selected)FontWeight.Medium else FontWeight.Normal)
         }
     }
 }
@@ -84,55 +109,94 @@ import androidx.compose.ui.viewinterop.AndroidView
     val status=uiText(listOf("代理未连接","连接中…","代理已连接","断开中…","连接失败").getOrElse(state){"同步中"})
     val action=uiText(listOf("连接","连接中…","断开","断开中…","重试连接").getOrElse(state){"同步中"})
     val description=uiText("代理开关")+"："+action
-    val dotColor=when(state) {
+    val targetDotColor=when(state) {
         2->skinSuccess
         1,3->skinPrimary
         4->skinError
-        else->skinSecondaryText.copy(alpha=.55f)
+        else->skinPalette.textTertiary
     }
-    UiCard(Modifier.testTag("white_connection_card")) {
-        Column(Modifier.padding(16.dp),verticalArrangement=Arrangement.spacedBy(8.dp)) {
+    val dotColor by animateColorAsState(targetDotColor,tween(180),label="statusDot")
+    val targetBorderColor=when {
+        state==2 -> skinSuccess.copy(alpha=.55f)
+        state==4 -> skinError.copy(alpha=.55f)
+        skinPalette.name=="linear" -> skinPalette.hairlineStrong.copy(alpha=.65f)
+        else -> skinDivider
+    }
+    val cardBorderColor by animateColorAsState(targetBorderColor,tween(180),label="cardBorder")
+    val cores=listOf("sing-box" to "sing-box","xray" to "Xray","mihomo" to "mihomo")
+    val currentCoreLabel=cores.firstOrNull { it.first.equals(proxyCore,ignoreCase=true) }?.second ?: proxyCore
+    var coreMenuOpen by remember { mutableStateOf(false) }
+
+    Surface(
+        modifier=Modifier.fillMaxWidth().testTag("white_connection_card"),
+        shape=MaterialTheme.shapes.large,
+        color=MaterialTheme.colorScheme.surface,
+        border=BorderStroke(1.dp,cardBorderColor),
+    ) {
+        Column(Modifier.padding(horizontal=14.dp,vertical=12.dp),verticalArrangement=Arrangement.spacedBy(8.dp)) {
             Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.SpaceBetween) {
-                Row(verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(8.dp)) {
+                Row(verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(7.dp)) {
                     Surface(color=dotColor,shape=CircleShape,modifier=Modifier.size(8.dp)) {}
-                    Surface(color=if(skinPalette.name=="miro")androidx.compose.ui.graphics.Color(0xFFC3FAF5) else androidx.compose.ui.graphics.Color.Transparent,shape=MaterialTheme.shapes.extraSmall) {
-                        Text(status,fontSize=12.sp,fontWeight=FontWeight.Medium,color=if(state==2)skinSuccess else if(state==4)skinError else skinSecondaryText,
-                            modifier=Modifier.testTag("connection_status").padding(horizontal=if(skinPalette.name=="miro")8.dp else 0.dp,vertical=if(skinPalette.name=="miro")4.dp else 0.dp))
-                    }
+                    Text(status,fontSize=12.sp,fontWeight=FontWeight.Medium,
+                        color=if(state==2)skinSuccess else if(state==4)skinError else skinSecondaryText,
+                        modifier=Modifier.testTag("connection_status"))
                 }
-                if(subtitle.isNotBlank())Surface(color=if(skinPalette.name=="miro")androidx.compose.ui.graphics.Color(0xFFFDE0F0) else skinSurfaceElevated,
-                    border=if(skinPalette.name=="linear")androidx.compose.foundation.BorderStroke(1.dp,skinDivider) else null,
+                if(subtitle.isNotBlank())Surface(color=skinSurfaceElevated,
+                    border=BorderStroke(.5.dp,skinDivider),
                     shape=MaterialTheme.shapes.extraSmall) {
-                    Text(subtitle,modifier=Modifier.padding(horizontal=8.dp,vertical=3.dp),fontSize=11.sp,
-                        fontFamily=androidx.compose.ui.text.font.FontFamily.Monospace,color=skinSecondaryText,maxLines=1,overflow=TextOverflow.Ellipsis)
+                    Text(subtitle,modifier=Modifier.padding(horizontal=7.dp,vertical=2.dp),fontSize=11.sp,
+                        fontFamily=FontFamily.Monospace,color=skinSecondaryText,maxLines=1,overflow=TextOverflow.Ellipsis)
                 }
             }
-            Text(selected,fontFamily=MaterialTheme.typography.titleLarge.fontFamily,fontSize=18.sp,fontWeight=FontWeight.SemiBold,maxLines=2,overflow=TextOverflow.Ellipsis,modifier=Modifier.testTag("home_selected_node"))
-            if(onSelectCore!=null) {
-                Surface(color=skinBackground,shape=MaterialTheme.shapes.small,border=androidx.compose.foundation.BorderStroke(1.dp,skinDivider)) {
-                    Row(Modifier.fillMaxWidth().padding(3.dp).testTag("core_switcher"),horizontalArrangement=Arrangement.spacedBy(4.dp)) {
-                        listOf("sing-box" to "sing-box","xray" to "Xray","mihomo" to "mihomo").forEach { (id,coreLabel)->
-                            val isActive=proxyCore.equals(id,ignoreCase=true)
-                            Surface(color=if(isActive)skinPrimary else androidx.compose.ui.graphics.Color.Transparent,
+            Text(selected,fontFamily=MaterialTheme.typography.titleLarge.fontFamily,fontSize=17.sp,lineHeight=22.sp,
+                fontWeight=FontWeight.SemiBold,maxLines=1,overflow=TextOverflow.Ellipsis,modifier=Modifier.testTag("home_selected_node"))
+            Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(8.dp)) {
+                Row(Modifier.weight(1f),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(8.dp)) {
+                    Text(uiText(if(serviceMode=="vpn")"VPN 模式" else "本地代理")+" · "+uiText(when(routeMode){"global"->"全局";"direct"->"直连";else->"智能分流"}),
+                        fontSize=12.sp,color=skinSecondaryText,maxLines=1,overflow=TextOverflow.Ellipsis,modifier=Modifier.weight(1f,fill=false))
+                    if(onSelectCore!=null) {
+                        Box {
+                            Surface(
+                                color=skinSurfaceElevated,
                                 shape=MaterialTheme.shapes.extraSmall,
-                                modifier=Modifier.weight(1f).clip(MaterialTheme.shapes.extraSmall).clickable(enabled=state!=1 && state!=3){onSelectCore(id)}.testTag("core_chip_$id")) {
-                                Box(Modifier.heightIn(min=34.dp),contentAlignment=Alignment.Center) {
-                                    Text(coreLabel,fontSize=11.sp,fontFamily=androidx.compose.ui.text.font.FontFamily.Monospace,
-                                        fontWeight=if(isActive)FontWeight.SemiBold else FontWeight.Medium,
-                                        color=if(isActive)skinPalette.onPrimary else skinSecondaryText,maxLines=1)
+                                border=BorderStroke(1.dp,skinDivider),
+                                modifier=Modifier.clip(MaterialTheme.shapes.extraSmall)
+                                    .clickable(enabled=state!=1 && state!=3){coreMenuOpen=true}
+                                    .testTag("core_switcher"),
+                            ) {
+                                Row(Modifier.heightIn(min=28.dp).padding(start=8.dp,end=4.dp),verticalAlignment=Alignment.CenterVertically) {
+                                    Text(currentCoreLabel,fontSize=11.sp,fontFamily=FontFamily.Monospace,fontWeight=FontWeight.Medium,color=skinOnSurface,maxLines=1)
+                                    Icon(Icons.Outlined.ArrowDropDown,null,Modifier.size(16.dp),tint=skinSecondaryText)
+                                }
+                            }
+                            DropdownMenu(expanded=coreMenuOpen,onDismissRequest={coreMenuOpen=false}) {
+                                cores.forEach { (id,coreLabel) ->
+                                    val isActive=proxyCore.equals(id,ignoreCase=true)
+                                    DropdownMenuItem(
+                                        text={Text(coreLabel,fontFamily=FontFamily.Monospace,fontWeight=if(isActive)FontWeight.SemiBold else FontWeight.Normal)},
+                                        onClick={coreMenuOpen=false;onSelectCore(id)},
+                                        modifier=Modifier.testTag("core_chip_$id"),
+                                    )
                                 }
                             }
                         }
                     }
                 }
-            }
-            Row(Modifier.fillMaxWidth().padding(top=4.dp),verticalAlignment=Alignment.CenterVertically) {
-                Text(uiText(if(serviceMode=="vpn")"VPN 模式" else "本地代理")+" · "+uiText(when(routeMode){"global"->"全局";"direct"->"直连";else->"智能分流"}),fontSize=12.sp,color=skinSecondaryText,modifier=Modifier.weight(1f))
-                Spacer(Modifier.width(12.dp))
-                Button(onClick=onToggle,enabled=state!=1 && state!=3,shape=MaterialTheme.shapes.small,
-                    colors=ButtonDefaults.buttonColors(containerColor=if(state==2)skinSuccess else skinPrimary,contentColor=skinPalette.onPrimary),
-                    modifier=Modifier.heightIn(min=44.dp).testTag("connect_toggle").semantics{contentDescription=description}) {
-                    Icon(Icons.Outlined.PowerSettingsNew,null,Modifier.size(18.dp));Spacer(Modifier.width(6.dp));Text(action,fontWeight=FontWeight.SemiBold)
+                val isConnected=state==2
+                val btnContainer by animateColorAsState(if(isConnected)skinSurfaceElevated else skinPrimary,tween(180),label="connectBtnBg")
+                val btnContent by animateColorAsState(if(isConnected)skinOnSurface else skinPalette.onPrimary,tween(180),label="connectBtnFg")
+                Button(
+                    onClick=onToggle,
+                    enabled=state!=1 && state!=3,
+                    shape=MaterialTheme.shapes.small,
+                    border=if(isConnected)BorderStroke(1.dp,skinPalette.hairlineStrong) else null,
+                    contentPadding=PaddingValues(horizontal=14.dp,vertical=8.dp),
+                    colors=ButtonDefaults.buttonColors(containerColor=btnContainer,contentColor=btnContent),
+                    modifier=Modifier.heightIn(min=40.dp).testTag("connect_toggle").semantics{contentDescription=description},
+                ) {
+                    Icon(Icons.Outlined.PowerSettingsNew,null,Modifier.size(16.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text(action,fontSize=13.sp,fontWeight=FontWeight.SemiBold,maxLines=1)
                 }
             }
         }
@@ -142,14 +206,17 @@ import androidx.compose.ui.viewinterop.AndroidView
 @Composable internal fun WhiteNavigation(page:Int,onPage:(Int)->Unit) {
     Surface(color=skinSurface) {
         Column { HorizontalDivider(thickness=1.dp,color=skinDivider)
-            Row(Modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal=8.dp,vertical=6.dp)) {
+            Row(Modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal=6.dp,vertical=2.dp)) {
                 listOf("节点" to Icons.Outlined.Dns,"智能分流" to Icons.Outlined.AccountTree,"设置" to Icons.Outlined.Tune).forEachIndexed { index,(label,icon)->
                     val activeTint=if(skinPalette.name=="linear")skinPrimaryDark else skinPrimary
-                    Surface(color=if(page==index && skinPalette.name=="miro")skinIconTile else if(page==index)skinSurfaceElevated else androidx.compose.ui.graphics.Color.Transparent,shape=MaterialTheme.shapes.small,
+                    val pillColor=if(page==index && skinPalette.name=="miro")skinIconTile else if(page==index)skinSurfaceElevated else androidx.compose.ui.graphics.Color.Transparent
+                    Surface(color=androidx.compose.ui.graphics.Color.Transparent,shape=MaterialTheme.shapes.small,
                         modifier=Modifier.weight(1f).semantics{selected=page==index;role=Role.Tab}.clickable{onPage(index)}.testTag(if(index==0)"home_tab" else "tab_$index")) {
-                        Column(Modifier.heightIn(min=60.dp).padding(vertical=7.dp),horizontalAlignment=Alignment.CenterHorizontally,verticalArrangement=Arrangement.spacedBy(4.dp)) {
-                            Icon(icon,null,Modifier.size(22.dp),tint=if(page==index)activeTint else skinSecondaryText)
-                            Text(uiText(label),fontSize=12.sp,fontWeight=if(page==index)FontWeight.SemiBold else FontWeight.Normal,color=if(page==index)activeTint else skinSecondaryText,maxLines=1)
+                        Column(Modifier.heightIn(min=51.dp).padding(vertical=3.dp,horizontal=2.dp),horizontalAlignment=Alignment.CenterHorizontally,verticalArrangement=Arrangement.spacedBy(2.dp)) {
+                            Surface(color=pillColor,shape=MaterialTheme.shapes.extraSmall) {
+                                Icon(icon,null,Modifier.padding(horizontal=12.dp,vertical=3.dp).size(20.dp),tint=if(page==index)activeTint else skinSecondaryText)
+                            }
+                            Text(uiText(label),fontSize=12.sp,lineHeight=15.sp,fontWeight=if(page==index)FontWeight.Medium else FontWeight.Normal,color=if(page==index)activeTint else skinSecondaryText,maxLines=1)
                         }
                     }
                 }

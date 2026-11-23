@@ -49,11 +49,9 @@ class SingBoxEngine(private val platform:NativePlatform) {
         main?.applyAutoURLTestResults(groupTag,results.entries.joinToString("\n") { "${it.key}\t${it.value}" }) ?: ""
     fun urlTestTouch(groupTag:String) { main?.urlTestTouch(groupTag) }
     fun urlTestDueIn(groupTag:String):Long = main?.urlTestDueIn(groupTag) ?: -1L
-    fun urlTestIdleFor(groupTag:String):Long = main?.urlTestIdleFor(groupTag) ?: -1L
     fun urlTestInFlight(groupTag:String):Boolean = main?.urlTestInFlight(groupTag) ?: false
     fun urlTestIfDue(groupTag:String,idleLimitMs:Long):Boolean = main?.urlTestIfDue(groupTag,idleLimitMs) ?: false
     fun urlTestRoundInfo(groupTag:String):String = main?.urlTestRoundInfo(groupTag).orEmpty()
-    fun closeIdleConnections() { main?.closeIdleConnections() }
     fun resetNetwork()=Libcore.resetAllConnections(true)
     fun sleep() { main?.sleep() }
     fun wake() { main?.wake() }

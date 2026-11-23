@@ -28,6 +28,27 @@ abstract class ExtraCoreService : Service() {
         }
     }
 
+    private fun scheduleAsyncExit() {
+        val shouldStart = synchronized(lock) {
+            if (stopping) false else {
+                stopping = true
+                true
+            }
+        }
+        if (!shouldStart) return
+        Thread({
+            try {
+                runCatching { ExtraCoreNative.stop() }
+                synchronized(lock) {
+                    protectorBinder?.let { runCatching { it.unlinkToDeath(protectorDeath, 0) } }
+                    protectorBinder = null
+                }
+            } finally {
+                Process.killProcess(Process.myPid())
+            }
+        }, "extra-core-stop").start()
+    }
+
     private fun stopAndExitLocked(): String {
         if (stopping) return ""
         stopping = true
@@ -90,14 +111,14 @@ abstract class ExtraCoreService : Service() {
     override fun onBind(intent: Intent?): IBinder = binder
 
     override fun onUnbind(intent: Intent?): Boolean {
-        synchronized(lock) { stopAndExitLocked() }
+        scheduleAsyncExit()
         stopSelf()
         return false
     }
 
     override fun onDestroy() {
         try {
-            synchronized(lock) { stopAndExitLocked() }
+            scheduleAsyncExit()
         } finally {
             super.onDestroy()
         }

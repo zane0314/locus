@@ -64,11 +64,16 @@ class SubscriptionRepairTest {
         assertEquals("h3",SubscriptionDnsOptions.server("h3://dns.example","test").getString("type"))
     }
     @Test fun nodeCleanupPreservesLiveAndUnknownKeysButRemovesPairedStaleChoices() {
-        val keep=mapOf("sort_ping_10" to "30","sort_ping_future" to "keep","groupSelection.group-1" to "node-10","groupSelectionDelay.group-1" to "30","groupSelection.future" to "node-999","groupSelectionDelay.future" to "9","other" to "keep")
-        val stale=mapOf("sort_ping_11" to "40","sort_ping_99999999999999999999999" to "2","groupSelection.group-2" to "node-10","groupSelectionDelay.group-2" to "30","groupSelection.merge-3" to "node-999","groupSelectionDelay.merge-3" to "50","groupSelectionDelay.merge-4" to "8")
-        val original=AppData(nodes=listOf(Node(10,1,"node","{}")),groups=listOf(Group(1,"group")),merges=listOf(MergeGroup(3,"merge")),settings=keep+stale)
-        assertEquals(keep,original.withoutStaleNodeSettings().settings)
-        assertEquals(keep+stale,original.settings)
+        val keep=mapOf("sort_ping_10" to "30","sort_ping_future" to "keep","groupSelection.group-1" to "node-10","groupSelectionDelay.group-1" to "30","groupSelection.group-5" to "node-50","groupSelectionDelay.group-5" to "25","groupSelection.future" to "node-999","groupSelectionDelay.future" to "9","other" to "keep")
+        val stale=mapOf("sort_ping_11" to "40","sort_ping_99999999999999999999999" to "2","groupSelection.group-2" to "node-10","groupSelectionDelay.group-2" to "30","groupSelection.smart-group-1" to "node-10","groupSelectionDelay.smart-group-1" to "30","groupSelection.smart-group-5" to "node-50","groupSelectionDelay.smart-group-5" to "25","groupSelection.smart-ai" to "node-10","groupSelectionDelay.smart-ai" to "30","groupSelection.merge-3" to "node-999","groupSelectionDelay.merge-3" to "50","groupSelectionDelay.merge-4" to "8")
+        val original=AppData(
+            nodes=listOf(Node(10,1,"node","{}"),Node(50,5,"disabled-member","{}")),
+            groups=listOf(Group(1,"group",enabled=true),Group(5,"disabled-group",enabled=false)),
+            merges=listOf(MergeGroup(3,"merge")),
+            settings=keep+stale+mapOf("smart.youtube.target" to "group:5")
+        )
+        assertEquals(keep+mapOf("smart.youtube.target" to "group:5"),original.withoutStaleNodeSettings().settings)
+        assertEquals(keep+stale+mapOf("smart.youtube.target" to "group:5"),original.settings)
     }
     @Test fun specifiedDnsFailureAbortsPreparationAndPreservesSource() = runBlocking {
         val source=ParsedNode("node","""{"type":"trojan","server":"edge.example","tls":{"enabled":true}}""")

@@ -266,7 +266,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     }
     fun updateGroup(group: Group) = task { updateGroupNow(group) }
     fun updateAllGroups() {
-        val groups=data.value.groups.filter { it.enabled && it.subscriptionUrl.isNotBlank() }
+        val snapshot=data.value
+        val groups=snapshot.groups.filter { it.enabled && it.subscriptionUrl.isNotBlank() }
+            .mapNotNull { g -> if(derivedGroupSourceId(g)>0) snapshot.groups.firstOrNull { it.id==derivedGroupSourceId(g) && it.subscriptionUrl.isNotBlank() } else g }
+            .distinctBy { it.id }
         if(groups.isEmpty()) { message.value="没有可更新的订阅";return }
         task {
             var testedOk=0;var testedIncomplete=0;var updateFailed=0
@@ -355,16 +358,21 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     private fun removeNodes(d:AppData,ids:Set<Long>,allowGenerated:Boolean=false):AppData {
         if(!allowGenerated)require(d.nodes.none { it.id in ids && derivedNodeSourceId(it)>0 && d.groups.firstOrNull { group->group.id==it.groupId }?.let(::derivedGroupSourceId)?.let { sourceId->sourceId>0 }==true }) { "自动成员随源分组管理，请删除整个链式分组" }
         val removed=com.zane.zanebox.subscription.nodeRemovalIds(d.nodes,ids)
-        val remaining=d.nodes.filter{it.id !in removed}
-        return d.copy(nodes=remaining,
-            settings=cleanSmartTargets((if(d.selectedNodeId in removed)d.settings+("selectedNodeId" to "0")else d.settings).filterKeys { key -> removed.none { key=="nodeRegion.$it" } },removed.map{"node:$it"}.toSet()),
+        val removedTargets=removed.map { "node:$it" }.toSet()
+        val remaining=d.nodes.filter{it.id !in removed}.map { cleanNodeChainTargets(it,removedTargets) }
+        val cleanedGroups=d.groups.map { cleanGroupChainTargets(it,removed,removedTargets) }
+        return d.copy(nodes=remaining,groups=cleanedGroups,
+            settings=cleanSmartTargets((if(d.selectedNodeId in removed)d.settings+("selectedNodeId" to "0")else d.settings).filterKeys { key -> removed.none { key=="nodeRegion.$it" } },removedTargets),
             rules=d.rules.map{if(it.outbound.startsWith("node:") && it.outbound.substringAfter(':').toLongOrNull() in removed)it.copy(outbound="proxy")else it},
             merges=d.merges.map{it.copy(nodeIds=it.nodeIds.filter{n->n !in removed},selectedId=if(it.selectedId in removed)0 else it.selectedId)}).withoutStaleNodeSettings().withEnabledSelection()
     }
     fun deleteGroup(id:Long) = edit { d ->
         val cleaned=removeNodes(d,d.nodes.filter { it.groupId==id }.map { it.id }.toSet(),allowGenerated=true)
-        cleaned.copy(groups=cleaned.groups.filter{it.id!=id},
-            settings=cleanSmartTargets(cleaned.settings,setOf("group:$id"))+("browseGroupId" to if(d.browseGroupId==id)"0" else d.browseGroupId.toString())+("smartSourceGroupId" to if(d.setting("smartSourceGroupId")==id.toString())"0" else d.setting("smartSourceGroupId","0"))+("selectedGroupId" to if(cleaned.selectedGroupId==id)"0" else cleaned.selectedGroupId.toString()),
+        val removedGroupTargets=setOf("group:$id")
+        cleaned.copy(
+            nodes=cleaned.nodes.map { cleanNodeChainTargets(it,removedGroupTargets) },
+            groups=cleaned.groups.filter{it.id!=id}.map { cleanGroupChainTargets(it,emptySet(),removedGroupTargets) },
+            settings=cleanSmartTargets(cleaned.settings,removedGroupTargets)+("browseGroupId" to if(d.browseGroupId==id)"0" else d.browseGroupId.toString())+("smartSourceGroupId" to if(d.setting("smartSourceGroupId")==id.toString())"0" else d.setting("smartSourceGroupId","0"))+("selectedGroupId" to if(cleaned.selectedGroupId==id)"0" else cleaned.selectedGroupId.toString()),
             rules=cleaned.rules.map { if(it.outbound=="group:$id")it.copy(outbound="proxy")else it },
             merges=cleaned.merges.map { it.copy(groupIds=it.groupIds-id) }).withoutStaleNodeSettings()
     }
@@ -410,6 +418,28 @@ internal fun subscriptionShareLink(group:Group):String=if(group.subscriptionUrl.
 private fun mergeMetadata(old:String,fresh:String):String = org.json.JSONObject(old).apply { val incoming=org.json.JSONObject(fresh);incoming.keys().forEach{key->put(key,incoming.get(key))} }.toString()
 
 private fun cleanSmartTargets(settings:Map<String,String>,removed:Set<String>):Map<String,String> = settings.mapValues { (key,value) -> if(key.startsWith("smart.") && key.endsWith(".target") && value in removed) "off" else value }
+
+private fun cleanGroupChainTargets(g:Group,removedNodes:Set<Long>,removedTargets:Set<String>):Group {
+    val fp=if(g.frontProxy in removedNodes)0L else g.frontProxy
+    val lp=if(g.landingProxy in removedNodes)0L else g.landingProxy
+    val opts=runCatching { org.json.JSONObject(g.options) }.getOrNull()
+    val nextOptions=if(opts?.has("chain")==true) {
+        val ch=opts.optJSONObject("chain") ?: org.json.JSONObject()
+        if(ch.optString("front") in removedTargets)ch.put("front","none")
+        if(ch.optString("landing") in removedTargets)ch.put("landing","none")
+        opts.put("chain",ch).toString()
+    } else g.options
+    return g.copy(frontProxy=fp,landingProxy=lp,options=nextOptions)
+}
+
+private fun cleanNodeChainTargets(n:Node,removedTargets:Set<String>):Node {
+    val meta=runCatching { org.json.JSONObject(n.metadata) }.getOrNull() ?: return n
+    val ch=meta.optJSONObject("chain") ?: return n
+    var changed=false
+    if(ch.optString("front") in removedTargets) { ch.put("front","none");changed=true }
+    if(ch.optString("landing") in removedTargets) { ch.put("landing","none");changed=true }
+    return if(changed)n.copy(metadata=meta.put("chain",ch).toString()) else n
+}
 
 internal fun AppData.withEnabledSelection(): AppData {
     val enabledGroups = groups.filter { it.enabled }.sortedBy { it.order }

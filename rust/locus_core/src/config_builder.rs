@@ -448,6 +448,20 @@ fn url_test_options(item: &mut Map<String, Value>, data: &AppData) -> Result<(),
     if !interval_re.is_match(interval) {
         return Err("URLTest 间隔无效".to_string());
     }
+    let digits_end = interval.bytes().take_while(|b| b.is_ascii_digit()).count();
+    let count: u64 = interval[..digits_end]
+        .parse()
+        .map_err(|_| "URLTest 间隔无效".to_string())?;
+    let unit_ms: u64 = match &interval[digits_end..] {
+        "ms" => 1,
+        "s" => 1_000,
+        "m" => 60_000,
+        "h" => 3_600_000,
+        _ => return Err("URLTest 间隔无效".to_string()),
+    };
+    let interval_ms = count
+        .checked_mul(unit_ms)
+        .ok_or_else(|| "URLTest 间隔无效".to_string())?;
     let tolerance = data
         .setting("urlTestTolerance")
         .parse::<i32>()
@@ -457,6 +471,9 @@ fn url_test_options(item: &mut Map<String, Value>, data: &AppData) -> Result<(),
     }
     item.insert("url".into(), Value::String(data.setting("testUrl").to_string()));
     item.insert("interval".into(), Value::String(interval.to_string()));
+    if interval_ms > 30 * 60_000 {
+        item.insert("idle_timeout".into(), Value::String(interval.to_string()));
+    }
     item.insert("tolerance".into(), Value::Number(tolerance.into()));
     Ok(())
 }

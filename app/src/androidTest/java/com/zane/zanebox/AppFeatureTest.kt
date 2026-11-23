@@ -21,8 +21,9 @@ class AppFeatureTest {
     }
     @Test fun actualPagesSaveIndependentListsAndReopenHistoricalSelection() {
         val vm=seed()
-        assertTrue(compose.onNodeWithTag("tab_1").getUnclippedBoundsInRoot().left<compose.onNodeWithTag("connect_toggle").getUnclippedBoundsInRoot().left)
-        assertTrue(compose.onNodeWithTag("tab_2").getUnclippedBoundsInRoot().left>compose.onNodeWithTag("connect_toggle").getUnclippedBoundsInRoot().left)
+        compose.onNodeWithTag("connect_toggle").assertIsDisplayed()
+        assertTrue(compose.onNodeWithTag("home_tab").getUnclippedBoundsInRoot().left<compose.onNodeWithTag("tab_1").getUnclippedBoundsInRoot().left)
+        assertTrue(compose.onNodeWithTag("tab_1").getUnclippedBoundsInRoot().left<compose.onNodeWithTag("tab_2").getUnclippedBoundsInRoot().left)
         compose.onNodeWithTag("tab_1").performClick()
         scroll("smart_ai");compose.onNodeWithTag("smart_ai").performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.OnClick){it()}
         scroll("smart_apps_ai");compose.onNodeWithTag("smart_apps_ai").performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.OnClick){it()}

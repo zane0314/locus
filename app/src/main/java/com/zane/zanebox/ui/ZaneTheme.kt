@@ -59,6 +59,10 @@ data class ZaneSkinPalette(
     val backdropEnd: Color,
     val onPrimary: Color = Color.White,
     val dark: Boolean = false,
+    val hairlineStrong: Color = divider,
+    val textTertiary: Color = secondaryText,
+    val chipSelectedBg: Color = iconTile,
+    val monoNumbers: Boolean = false,
 )
 
 private val PrismLight = ZaneSkinPalette(
@@ -69,6 +73,7 @@ private val PrismLight = ZaneSkinPalette(
     iconTile = Color(0xFFE5F4FB), selectedSurface = Color(0x14229ED9), success = Color(0xFF248A3D),
     warning = Color(0xFFF28A00), error = Color(0xFFD70015),
     backdropStart = Color(0xFFEEF2FF), backdropCenter = Color(0xFFE9EDFC), backdropEnd = Color(0xFFE4EAFB),
+    hairlineStrong = Color(0xFFD5DAE2), textTertiary = Color(0xFF7A8694),
 )
 
 private val LinearLight = ZaneSkinPalette(
@@ -80,34 +85,42 @@ private val LinearLight = ZaneSkinPalette(
     warning = Color(0xFFF5A623), error = Color(0xFFE5484D),
     backdropStart = Color(0xFF010102), backdropCenter = Color(0xFF08090A), backdropEnd = Color(0xFF010102),
     onPrimary = Color.White, dark = true,
+    hairlineStrong = Color(0xFF343841), textTertiary = Color(0xFF62666D),
+    chipSelectedBg = Color(0xFF1B1E36), monoNumbers = true,
 )
 
 private val ClaudeLight = LinearLight.copy(
-    name="claude", primary=Color(0xFFA9583E), primaryDark=Color(0xFFA9583E),
-    background=Color(0xFFFAF9F5), surface=Color(0xFFEFE9DE), surfaceElevated=Color(0xFFF5F0E8),
-    onSurface=Color(0xFF252523), secondaryText=Color(0xFF6C6A64), divider=Color(0xFFE6DFD8),
-    iconTile=Color(0xFFE8E0D2), selectedSurface=Color(0xFFE8E0D2),
+    name="claude", primary=Color(0xFFCC785C), primaryDark=Color(0xFFA9583E),
+    background=Color(0xFFFAF9F5), surface=Color(0xFFF5F2EA), surfaceElevated=Color(0xFFEDE7DC),
+    onSurface=Color(0xFF252523), secondaryText=Color(0xFF6C6A64), divider=Color(0xFFE5DEC9),
+    iconTile=Color(0xFFEFE6D8), selectedSurface=Color(0xFFEFE6D8),
     success=Color(0xFF286C45), warning=Color(0xFF865C09), error=Color(0xFFAA3434),
     backdropStart=Color(0xFFFAF9F5), backdropCenter=Color(0xFFFAF9F5), backdropEnd=Color(0xFFFAF9F5),
     onPrimary=Color.White, dark=false,
+    hairlineStrong=Color(0xFFD6CCBE), textTertiary=Color(0xFF8C887F),
+    chipSelectedBg=Color(0xFFEFE6D8), monoNumbers=false,
 )
 private val SupabaseDark = LinearLight.copy(
     name="supabase", primary=Color(0xFF3ECF8E), primaryDark=Color(0xFF24B47E),
     background=Color(0xFF1C1C1C), surface=Color(0xFF252525), surfaceElevated=Color(0xFF303030),
-    onSurface=Color(0xFFF5F5F5), secondaryText=Color(0xFFB2B2B2), divider=Color(0xFF454545),
+    onSurface=Color(0xFFF5F5F5), secondaryText=Color(0xFFB2B2B2), divider=Color(0xFF383838),
     iconTile=Color(0xFF193D2C), selectedSurface=Color(0xFF193D2C),
     success=Color(0xFF3ECF8E), warning=Color(0xFFF4C76C), error=Color(0xFFFF9696),
     backdropStart=Color(0xFF1C1C1C), backdropCenter=Color(0xFF1C1C1C), backdropEnd=Color(0xFF1C1C1C),
     onPrimary=Color(0xFF171717), dark=true,
+    hairlineStrong=Color(0xFF4A4A4A), textTertiary=Color(0xFF7E7E7E),
+    chipSelectedBg=Color(0xFF193D2C), monoNumbers=true,
 )
 private val MiroLight = LinearLight.copy(
     name="miro", primary=Color(0xFF1C1C1E), primaryDark=Color(0xFF1C1C1E),
-    background=Color.White, surface=Color(0xFFF7F8FA), surfaceElevated=Color(0xFFFFF4C4),
+    background=Color.White, surface=Color(0xFFF7F8FA), surfaceElevated=Color(0xFFEFF1F5),
     onSurface=Color(0xFF1C1C1E), secondaryText=Color(0xFF555A6A), divider=Color(0xFFE0E2E8),
     iconTile=Color(0xFFFFD02F), selectedSurface=Color(0xFFFFF4C4),
     success=Color(0xFF187574), warning=Color(0xFF746019), error=Color(0xFF9C2929),
     backdropStart=Color.White, backdropCenter=Color.White, backdropEnd=Color.White,
     onPrimary=Color.White, dark=false,
+    hairlineStrong=Color(0xFFCDD1DC), textTertiary=Color(0xFF7C8294),
+    chipSelectedBg=Color(0xFFFFD02F), monoNumbers=false,
 )
 
 val LocalZaneSkin = compositionLocalOf { PrismLight }
@@ -154,10 +167,10 @@ private val ZaneTypography = Typography().run {
         displayLarge = displayLarge.copy(fontFamily = FontFamily.SansSerif),
         displayMedium = displayMedium.copy(fontFamily = FontFamily.SansSerif),
         displaySmall = displaySmall.copy(fontFamily = FontFamily.SansSerif),
-        headlineLarge = headlineLarge.copy(fontFamily = FontFamily.SansSerif, fontWeight = FontWeight.Bold),
-        headlineMedium = headlineMedium.copy(fontFamily = FontFamily.SansSerif, fontWeight = FontWeight.Bold),
-        headlineSmall = headlineSmall.copy(fontFamily = FontFamily.SansSerif, fontWeight = FontWeight.Bold),
-        titleLarge = titleLarge.copy(fontFamily = FontFamily.SansSerif, fontWeight = FontWeight.Bold),
+        headlineLarge = headlineLarge.copy(fontFamily = FontFamily.SansSerif, fontWeight = FontWeight.SemiBold),
+        headlineMedium = headlineMedium.copy(fontFamily = FontFamily.SansSerif, fontWeight = FontWeight.SemiBold),
+        headlineSmall = headlineSmall.copy(fontFamily = FontFamily.SansSerif, fontWeight = FontWeight.SemiBold),
+        titleLarge = titleLarge.copy(fontFamily = FontFamily.SansSerif, fontWeight = FontWeight.SemiBold, letterSpacing = (-0.25).sp),
         titleMedium = titleMedium.copy(fontFamily = FontFamily.SansSerif, fontWeight = FontWeight.Medium),
         titleSmall = titleSmall.copy(fontFamily = FontFamily.SansSerif, fontWeight = FontWeight.Medium),
         bodyLarge = bodyLarge.copy(fontFamily = FontFamily.SansSerif),
@@ -177,6 +190,8 @@ fun ZaneTheme(data: AppData, content: @Composable () -> Unit) {
         "linear"->LinearLight; "claude"->ClaudeLight; "supabase"->SupabaseDark; "miro"->MiroLight; else->PrismLight
     }
     SideEffect { (context as? android.app.Activity)?.window?.let{configureSystemBars(it,view,skin.dark)} }
+    val inverseBg = if(skin.dark) skin.surfaceElevated else Color(0xFF1F2228)
+    val inverseFg = if(skin.dark) skin.onSurface else Color(0xFFF7F8F8)
     val colors = (if(skin.dark)darkColorScheme() else lightColorScheme()).copy(
         primary = skin.primary, onPrimary = skin.onPrimary, primaryContainer = skin.iconTile,
         onPrimaryContainer = skin.onSurface, secondary = skin.secondaryText, onSecondary = if(skin.dark)skin.background else Color.White,
@@ -184,12 +199,13 @@ fun ZaneTheme(data: AppData, content: @Composable () -> Unit) {
         onSurface = skin.onSurface, surfaceVariant = skin.surfaceElevated, onSurfaceVariant = skin.secondaryText,
         error = skin.error, onError = if(skin.dark)skin.background else Color.White, outline = skin.divider, outlineVariant = skin.divider,
         surfaceContainer = skin.surfaceElevated,
+        inverseSurface = inverseBg, inverseOnSurface = inverseFg, inversePrimary = skin.primaryDark,
     ).let { colors ->
         if(skin.name!="prism")colors.copy(
             secondaryContainer=skin.surfaceElevated,onSecondaryContainer=skin.onSurface,
             tertiary=skin.primary,onTertiary=skin.onPrimary,tertiaryContainer=skin.iconTile,onTertiaryContainer=skin.onSurface,
             surfaceContainerLowest=skin.background,surfaceContainerLow=skin.surface,
-            surfaceContainerHigh=skin.surface,surfaceContainerHighest=skin.surfaceElevated,
+            surfaceContainerHigh=skin.surfaceElevated,surfaceContainerHighest=skin.surfaceElevated,
         ) else colors
     }
     CompositionLocalProvider(

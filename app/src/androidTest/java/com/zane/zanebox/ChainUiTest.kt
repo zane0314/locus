@@ -129,10 +129,10 @@ class ChainHomeUiTest {
         val longName="机场中转节点名称很长用于验证链式入口布局与操作不会互相遮挡"
         compose.runOnIdle{vm.edit{AppData(nodes=listOf(Node(1,1,longName,"""{"type":"socks","server":"127.0.0.1","server_port":9}""")),groups=listOf(Group(1,"机场订阅分组名称很长用于布局检查")),settings=mapOf("selectedNodeId" to "1","browseGroupId" to "0","appLanguage" to "zh-CN","fontScale" to "2.0"))}}
         compose.waitUntil(10000){!vm.busy.value && vm.data.value.nodes.any{it.name==longName}}
-        compose.onNodeWithTag("home_chain_summary").assertIsDisplayed()
-        val entry=compose.onNodeWithTag("home_chain_summary").getUnclippedBoundsInRoot()
+        compose.onNodeWithTag("home_chain_summary").assertDoesNotExist()
+        val card=compose.onNodeWithTag("white_connection_card").getUnclippedBoundsInRoot()
         val groups=compose.onNodeWithTag("home_groups").getUnclippedBoundsInRoot()
-        assertTrue("链式入口不得遮挡分组",entry.bottom<=groups.top)
+        assertTrue("连接卡片不得遮挡分组",card.bottom<=groups.top)
         compose.onNodeWithTag("node_menu").performClick()
         compose.onNodeWithText("链式代理").performClick()
         compose.onNodeWithTag("chain_create").assertIsDisplayed().assertHasClickAction().performClick()

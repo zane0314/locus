@@ -14,14 +14,14 @@ internal data class Preference(
 )
 internal fun boolean(key:String,title:String,default:Boolean=SettingDefaults.value(key,"false").toBoolean())=Preference(key,title,default.toString(),boolean=true)
 internal fun choice(key:String,title:String,default:String,vararg values:Pair<String,String>)=Preference(key,title,default,values.toList())
-internal val uiSkinChoices=listOf("prism" to "棱镜流光","linear" to "简洁留白","claude" to "暖纸陶色","supabase" to "深色翡翠","miro" to "明黄工作台")
+internal val uiSkinChoices=listOf("prism" to "棱镜流光","linear" to "深夜线条","claude" to "暖纸陶色","supabase" to "深色翡翠","miro" to "明黄工作台")
 // Retired skins render as the retained original UI without rewriting imported settings.
 internal fun resolvedUiSkin(value:String)=value.lowercase(java.util.Locale.ROOT).takeIf { id->uiSkinChoices.any {it.first==id} } ?: "prism"
 internal val strategies=listOf("" to "自动","prefer_ipv4" to "优先 IPv4","prefer_ipv6" to "优先 IPv6","ipv4_only" to "仅 IPv4","ipv6_only" to "仅 IPv6")
 private val ipv6Modes=listOf("ipv4_only" to "仅 IPv4","prefer_ipv4" to "优先 IPv4","prefer_ipv6" to "优先 IPv6","ipv6_only" to "仅 IPv6")
 private val languages=uiLanguageChoices
 private val rulesProviders=listOf("0" to "官方","1" to "Loyalsoldier","2" to "Chocolate4U / Iran","3" to "L11R / Antizapret","4" to "自定义")
-private val urlTestIntervals=listOf("1m" to "1 分钟","5m" to "5 分钟","10m" to "10 分钟","30m" to "30 分钟")
+private val urlTestIntervals=listOf("1m" to "1 分钟","5m" to "5 分钟","10m" to "10 分钟","30m" to "30 分钟","1h" to "1 小时")
 private val urlTestTolerances=listOf("5" to "5 ms","10" to "10 ms","30" to "30 ms","50" to "50 ms")
 
 internal fun preferenceSections(data:AppData)=listOf(

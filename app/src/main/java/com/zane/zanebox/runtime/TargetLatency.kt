@@ -43,20 +43,14 @@ internal class TargetPlan private constructor(
         return members.associate { id -> "node-$id" to (pings[id]?.takeIf { it > 0 && current[id] == outbounds[id] } ?: 0) }
     }
 
+    fun sameAs(other: TargetPlan): Boolean =
+        other.members.toSet() == members.toSet() && other.group == group && other.fingerprint == fingerprint
+
     fun stillValid(latest: AppData): Boolean =
-        create(latest, target, serviceKey).let {
-            it != null && it.members.toSet() == members.toSet() && it.group == group && it.fingerprint == fingerprint
-        }
+        create(latest, target, serviceKey)?.let(::sameAs) == true
 
     companion object {
-        fun create(data: AppData, target: String, serviceKey: String): TargetPlan? {
-            val obj = RustCore.callNullableObject(
-                "targetPlanCreate",
-                JSONObject()
-                    .put("data", data.toRustJson())
-                    .put("target", target)
-                    .put("serviceKey", serviceKey),
-            ) ?: return null
+        private fun fromJson(obj: JSONObject): TargetPlan {
             val memArr = obj.getJSONArray("members")
             val members = (0 until memArr.length()).map { memArr.getLong(it) }
             val grpObj = obj.optJSONObject("group")
@@ -73,6 +67,29 @@ internal class TargetPlan private constructor(
                 outbounds = outbounds,
                 fingerprint = obj.getString("fingerprint"),
             )
+        }
+
+        fun create(data: AppData, target: String, serviceKey: String): TargetPlan? {
+            val obj = RustCore.callNullableObject(
+                "targetPlanCreate",
+                JSONObject()
+                    .put("data", data.toRustJson())
+                    .put("target", target)
+                    .put("serviceKey", serviceKey),
+            ) ?: return null
+            return fromJson(obj)
+        }
+
+        fun createBatch(data: AppData, targets: List<String>, serviceKey: String = ""): Map<String, TargetPlan> {
+            if (targets.isEmpty()) return emptyMap()
+            val obj = RustCore.callObject(
+                "targetPlanCreateBatch",
+                JSONObject()
+                    .put("data", data.toRustJson())
+                    .put("targets", org.json.JSONArray(targets))
+                    .put("serviceKey", serviceKey),
+            )
+            return obj.keys().asSequence().associateWith { fromJson(obj.getJSONObject(it)) }
         }
 
         fun resolveGroup(data: AppData, target: String, serviceKey: String): TargetGroup? =

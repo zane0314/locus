@@ -46,7 +46,12 @@ class LatencyBatchRegressionTest {
                     JSONObject().put("id",it.id).put("ping",it.ping).put("status",it.status)
                 }))
         }
+        fun setFixtureDelay(aMs:Int,bMs:Int) {
+            val c=java.net.URL("http://10.0.2.2:19080/fixture-delay?a=$aMs&b=$bMs").openConnection(java.net.Proxy.NO_PROXY) as java.net.HttpURLConnection
+            try { c.connectTimeout=3000;c.readTimeout=3000;c.inputStream.use { it.readBytes() } } finally { c.disconnect() }
+        }
         try {
+            setFixtureDelay(20,180)
             assertEquals("12",AppData().setting("testConcurrency"))
             assertEquals("4000",AppData().setting("testTimeout"))
             val mixed=(1L..24L).map { node(it,if(it%2L==0L)19082 else 19081) }
@@ -131,6 +136,7 @@ class LatencyBatchRegressionTest {
             evidence.put("passed",false).put("failureClass",failure.javaClass.name).put("failureSnapshot",snapshot())
             throw failure
         } finally {
+            runCatching { setFixtureDelay(0,0) }
             File(context.getExternalFilesDir(null),"latency-batch-regression.json").writeText(evidence.toString(2))
             client.cancelTests();client.close();store.replace(original);store.close()
         }

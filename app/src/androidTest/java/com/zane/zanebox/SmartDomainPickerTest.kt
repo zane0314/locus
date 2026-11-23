@@ -37,7 +37,8 @@ class SmartDomainPickerTest {
         compose.onNodeWithText("域名关键词 · DOMAIN-KEYWORD").performClick()
         compose.onNodeWithTag("rule_domain_value").performTextReplacement("chosen-keyword")
         compose.onNodeWithTag("rule_domain_confirm").performClick()
-        androidx.test.espresso.Espresso.closeSoftKeyboard()
+        runCatching { androidx.test.espresso.Espresso.onView(androidx.test.espresso.matcher.ViewMatchers.isRoot()).inRoot(androidx.test.espresso.matcher.RootMatchers.isDialog()).perform(androidx.test.espresso.action.ViewActions.closeSoftKeyboard()) }
+        compose.waitForIdle()
         compose.onNodeWithTag("rule_source_save").performClick()
         compose.waitUntil(10000){!vm.busy.value && vm.data.value.setting("smartRules.speed").contains("chosen.example.test")}
 

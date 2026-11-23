@@ -633,11 +633,41 @@ impl AppData {
 
     pub fn without_stale_node_settings(&self) -> Self {
         let node_ids: HashSet<i64> = self.nodes.iter().map(|n| n.id).collect();
-        let mut selectors: HashSet<String> = self
-            .groups
+        let active_smart_groups: HashSet<String> = self
+            .settings
             .iter()
-            .flat_map(|g| [format!("group-{}", g.id), format!("smart-group-{}", g.id)])
+            .filter_map(|(k, v)| {
+                if k.starts_with("smart.") && k.ends_with(".target") {
+                    v.strip_prefix("group:").map(|gid| format!("smart-group-{gid}"))
+                } else {
+                    None
+                }
+            })
             .collect();
+        let active_smart_autos: HashSet<String> = self
+            .settings
+            .iter()
+            .filter_map(|(k, v)| {
+                let rest = k.strip_prefix("smart.")?;
+                let svc = rest.strip_suffix(".target")?;
+                if !svc.is_empty() && v == "auto" {
+                    Some(format!("smart-{svc}"))
+                } else {
+                    None
+                }
+            })
+            .collect();
+        let mut selectors: HashSet<String> = HashSet::new();
+        for g in &self.groups {
+            selectors.insert(format!("group-{}", g.id));
+            if g.enabled {
+                let smart_tag = format!("smart-group-{}", g.id);
+                if active_smart_groups.contains(&smart_tag) {
+                    selectors.insert(smart_tag);
+                }
+            }
+        }
+        selectors.extend(active_smart_autos);
         for m in &self.merges {
             selectors.insert(format!("merge-{}", m.id));
         }
@@ -695,6 +725,11 @@ fn is_selector_tag(tag: &str) -> bool {
         is_ascii_digits(rest)
     } else if let Some(rest) = tag.strip_prefix("smart-group-") {
         is_ascii_digits(rest)
+    } else if let Some(rest) = tag.strip_prefix("smart-") {
+        !rest.is_empty()
+            && rest
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
     } else if let Some(rest) = tag.strip_prefix("merge-") {
         is_ascii_digits(rest)
     } else {

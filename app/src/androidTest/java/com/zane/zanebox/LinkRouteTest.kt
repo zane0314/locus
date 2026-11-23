@@ -17,7 +17,7 @@ class LinkRouteTest {
         val store=ZaneStore(context)
         fun node(id:Long,name:String,port:Int)=Node(id,1,name,"""{"type":"socks","server":"10.0.2.2","server_port":$port}""")
         val base=AppData(nodes=listOf(node(1,"香港 A",19081),node(2,"日本 B",19082),node(3,"前置",19085),node(4,"中间",19086)),groups=listOf(Group(1,"链路")),settings=mapOf("selectedNodeId" to "1","appLanguage" to "zh-CN","serviceMode" to "vpn","dnsRemote" to "local","fakeDns" to "false","sniff" to "false","testUrl" to "http://10.0.2.2:19080/test","statsEnabled" to "false"))
-        store.replace(base);val client=ServiceClient(context);client.connect();shell("appops set com.zane.zanebox ACTIVATE_VPN allow")
+        store.replace(base);val client=ServiceClient(context);client.connect();shell("appops set ${context.packageName} ACTIVATE_VPN allow")
         fun apply(data:AppData) {store.replace(data.copy(settings=data.settings+("logLevel" to "debug")));val before=client.snapshot.value.generation;client.reload();waitFor("reload ${client.snapshot.value.error}"){client.snapshot.value.state==2 && client.snapshot.value.generation>before}}
         fun probe(expected:String,url:String="http://203.0.113.9:19080/probe",dnsAddress:String="") {
             val nonce="link"+System.nanoTime();shell("am start -W -n com.zane.probe/.ProbeActivity --es url $url --es nonce $nonce")

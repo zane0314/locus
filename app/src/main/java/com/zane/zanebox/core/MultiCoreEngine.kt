@@ -105,11 +105,9 @@ class MultiCoreEngine(
         singBox.applyAutoURLTestResults(groupTag, results)
     fun urlTestTouch(groupTag: String) = singBox.urlTestTouch(groupTag)
     fun urlTestDueIn(groupTag: String): Long = singBox.urlTestDueIn(groupTag)
-    fun urlTestIdleFor(groupTag: String): Long = singBox.urlTestIdleFor(groupTag)
     fun urlTestInFlight(groupTag: String): Boolean = singBox.urlTestInFlight(groupTag)
     fun urlTestIfDue(groupTag: String, idleLimitMs: Long): Boolean = singBox.urlTestIfDue(groupTag, idleLimitMs)
     fun urlTestRoundInfo(groupTag: String): String = singBox.urlTestRoundInfo(groupTag)
-    fun closeIdleConnections() = singBox.closeIdleConnections()
 
     fun resetNetwork() = singBox.resetNetwork()
     fun sleep() = singBox.sleep()
@@ -127,7 +125,7 @@ class MultiCoreEngine(
             try {
                 extraTest.validate(plan.kind, plan.extraCoreConfig)
             } finally {
-                extraTest.close()
+                runCatching { extraTest.close() }
             }
         }
     }

@@ -34,7 +34,7 @@ class IdleCpuProbeTest {
             val connectStart=SystemClock.elapsedRealtime()
             client.start();waitFor("连接",60000) { if(client.snapshot.value.state==4) fail(client.snapshot.value.error);client.snapshot.value.state==2 }
             result.put("connectMs",SystemClock.elapsedRealtime()-connectStart)
-            val pid=shell("pidof com.zane.zanebox:bg").trim();assertTrue("后台进程不存在",pid.isNotBlank())
+            val pid=shell("pidof ${context.packageName}:bg").trim();assertTrue("后台进程不存在",pid.isNotBlank())
             Thread.sleep(10000)
             val hz=100.0
             val idleStart=ticks(pid);Thread.sleep(idleSeconds*1000);val idleTicks=ticks(pid)-idleStart

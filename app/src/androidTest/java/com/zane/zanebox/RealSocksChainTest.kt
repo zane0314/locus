@@ -38,7 +38,7 @@ class RealSocksChainTest {
         val settings=builtinSmartRuleFiles.keys.associate {"smart.$it.target" to "off"}+mapOf(
             "serviceMode" to "vpn","routeMode" to "rule","selectedNodeId" to "1","selectedGroupId" to "1",
             "sniff" to "false","statsEnabled" to "false","bypassLan" to "false","bypassLanInCore" to "false",
-            "testUrl" to "https://www.google.com/generate_204","testTimeout" to "4000","rulesUpdateInterval" to "off",
+            "testUrl" to "https://www.google.com/generate_204","testTimeout" to "8000","rulesUpdateInterval" to "off",
             "globalCustomConfig" to """{"log":{"disabled":true}}""")
         val sourceData=AppData(nodes=nodes+socks,groups=listOf(Group(1,"原始机场 A"),Group(2,"原始台湾 B")),settings=settings)
         val data=sourceData.createDerivedChainGroup(1,"机场→台湾",ChainTargets(landing="node:51"))
@@ -75,8 +75,8 @@ class RealSocksChainTest {
             for(index in f.sourceIds.indices) {
                 val role=if(index==0)"japan" else "malaysia"
                 for((kind,id) in listOf("raw" to f.sourceIds[index],"chain" to f.chainIds[index])) {
-                    val delay=runCatching {engine.test(ConfigBuilder.build(f.data,Purpose.TEST,id),f.data.setting("testUrl"),4000)}.getOrDefault(-1)
-                    record("$role.$kind.test4000",delay>0,delay)
+                    val delay=runCatching {engine.test(ConfigBuilder.build(f.data,Purpose.TEST,id),f.data.setting("testUrl"),8000)}.getOrDefault(-1)
+                    record("$role.$kind.test8000",delay>0,delay)
                 }
             }
             val first=f.data.nodes.first {it.id==f.chainIds.first()}

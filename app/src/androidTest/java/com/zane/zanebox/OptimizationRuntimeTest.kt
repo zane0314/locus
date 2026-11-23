@@ -30,7 +30,7 @@ class OptimizationRuntimeTest {
                 store.putSetting("exitProbeUrl","http://203.0.113.9:19080/hang")
                 client.queryExitIp();Thread.sleep(250);val start=SystemClock.elapsedRealtime();client.stop();waitFor("nonblocking stop",2500){client.snapshot.value.state==0}
                 assertTrue(SystemClock.elapsedRealtime()-start<2500)
-            } finally {client.stop();client.close()}
+            } finally {client.stop();waitFor("stop"){client.snapshot.value.state==0};client.close()}
         }
     }
     @Test fun realtimeRuleScheduleResumesAfterOff() {
@@ -46,7 +46,7 @@ class OptimizationRuntimeTest {
                 client.start();waitFor("connect"){client.snapshot.value.state==2};Thread.sleep(500);assertEquals("",store.snapshot().setting("smartRules.custom"))
                 store.putSetting("rulesUpdateInterval","6h");client.refreshSettings()
                 waitFor("off to live schedule"){store.snapshot().setting("smartRules.custom").contains("updated.fixture")}
-            } finally {client.stop();client.close();server.close();responder.join(1000)}
+            } finally {client.stop();waitFor("stop"){client.snapshot.value.state==0};client.close();server.close();responder.join(1000)}
         }
     }
     @Test fun wakeResetUsesLiveSettingsWithoutReloadOrMainThreadDatabaseRead() {

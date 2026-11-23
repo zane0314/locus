@@ -24,7 +24,7 @@ use crate::runtime_logic::{
     parse_traffic_samples, read_chain_probe_plans, reorder_visible_ids,
     restorable_selector_choices, routed_chain_nodes, sampling_tracked_tags, saved_choice_delay,
     smart_lowest_node, smart_target_node_ids, target_latency_label, target_plan_create,
-    traffic_domain,
+    target_plan_create_batch, traffic_domain,
 };
 use crate::share_uri::{hysteria_hop_interval, percent_decode, socks_user_info, ShareUri};
 use crate::subscription_ops::{
@@ -605,6 +605,15 @@ fn dispatch(op: &str, body: &str) -> Result<Value, String> {
             let target = req_str(&req, "target")?;
             let service_key = req.get("serviceKey").and_then(Value::as_str).unwrap_or("");
             serde_json::to_value(target_plan_create(&data, target, service_key))
+                .map_err(|e| e.to_string())
+        }
+        "targetPlanCreateBatch" => {
+            let req = parse_req(body)?;
+            let data = req_app_data(&req, "data")?;
+            let targets: Vec<String> =
+                serde_json::from_value(req["targets"].clone()).map_err(|e| e.to_string())?;
+            let service_key = req.get("serviceKey").and_then(Value::as_str).unwrap_or("");
+            serde_json::to_value(target_plan_create_batch(&data, &targets, service_key))
                 .map_err(|e| e.to_string())
         }
         "reorderVisibleIds" => {

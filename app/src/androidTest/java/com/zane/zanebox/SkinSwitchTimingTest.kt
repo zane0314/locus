@@ -102,6 +102,8 @@ class SkinSwitchTimingTest {
             }
             for(a in skins)for(b in skins)if(a!=b)
                 assertTrue("屏幕指纹不能区分 $a / $b",similarity(golden.getValue(a),golden.getValue(b))<0.97)
+            // Let Android NotificationService's 5/sec package RateEstimator cool down after golden calibration.
+            SystemClock.sleep(1000)
             ZaneStore(instrumentation.targetContext).use {observerStore ->
                 repeat(3) {round -> for(skin in skins) {
                     click("setting_uiSkin")
@@ -150,7 +152,7 @@ class SkinSwitchTimingTest {
                         assertEquals(2,vm.service.snapshot.value.state)
                         assertEquals(session.generation,vm.service.snapshot.value.generation)
                         assertEquals(session.started,vm.service.snapshot.value.started)
-                    } finally {pool.shutdownNow();assertTrue("观察线程未停止",pool.awaitTermination(20,TimeUnit.SECONDS))}
+                    } finally {pool.shutdownNow();assertTrue("观察线程未停止",pool.awaitTermination(20,TimeUnit.SECONDS));SystemClock.sleep(150)}
                 }}
             }
             report.put("status","PASS")

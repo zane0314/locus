@@ -20,11 +20,11 @@ class HomeGroupsTest {
             compose.onNodeWithTag("group_summary").assertDoesNotExist();compose.onNodeWithTag("group_menu_1").assertDoesNotExist()
             val all=compose.onNodeWithTag("group_all").fetchSemanticsNode().layoutInfo.coordinates.size
             for(id in listOf(1,2))assertEquals(all.height,compose.onNodeWithTag("group_$id").fetchSemanticsNode().layoutInfo.coordinates.size.height)
-            val selected=compose.onNodeWithText("已选：主节点").getUnclippedBoundsInRoot()
+            compose.onNodeWithTag("home_chain_summary").assertDoesNotExist()
+            val card=compose.onNodeWithTag("white_connection_card").getUnclippedBoundsInRoot()
             val tab=compose.onNodeWithTag("group_all").getUnclippedBoundsInRoot()
-            val chain=compose.onNodeWithTag("home_chain_summary").getUnclippedBoundsInRoot()
-            assertTrue("链路入口应位于已选节点与分组之间",chain.top>=selected.bottom && chain.bottom<=tab.top)
-            assertTrue("入口与分组间留白过大",(tab.top-chain.bottom).value<=24f)
+            assertTrue("连接卡片应位于分组上方",card.bottom<=tab.top)
+            assertTrue("连接卡片与分组间留白过大",(tab.top-card.bottom).value<=24f)
             compose.onNodeWithTag("group_2").performTouchInput{longClick()}
             compose.onNodeWithTag("home_group_menu").assertIsDisplayed();assertEquals(0L,vm.data.value.browseGroupId)
             assertTrue(vm.data.value.groups.all{it.enabled})

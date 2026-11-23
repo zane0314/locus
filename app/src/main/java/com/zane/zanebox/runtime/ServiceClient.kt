@@ -40,7 +40,7 @@ class ServiceClient(context:Context,private val targetClass:Class<*>?=null) {
     private val scope=CoroutineScope(SupervisorJob()+Dispatchers.IO)
     private val commands=Channel<suspend ()->Unit>(Channel.UNLIMITED)
     init { scope.launch { for(task in commands) { try { task() } catch(e:Exception) { event.emit(e.message ?: "服务操作失败") } } } }
-    private fun submit(task:suspend ()->Unit) { commands.trySend(task) }
+    private fun submit(task:suspend ()->Unit) { if(!closed) commands.trySend(task) }
     private val state=MutableStateFlow(RuntimeSnapshot())
     val snapshot:StateFlow<RuntimeSnapshot> = state
     val autoNodeId=MutableStateFlow(0L)
@@ -70,7 +70,9 @@ class ServiceClient(context:Context,private val targetClass:Class<*>?=null) {
     private val panelState=MutableStateFlow("");val panelUrl:StateFlow<String> = panelState
     private val stunState=MutableStateFlow("{}");val stunResult:StateFlow<String> = stunState
     @Volatile private var remote:IRuntime?=null
-    private var bound=false
+    @Volatile private var closed=false
+    @Volatile private var pendingStop=false
+    @Volatile private var bound=false
     private var boundClass:Class<*>?=null
     private fun serviceClass():Class<*> = targetClass ?: RuntimeServiceTarget.serviceClass(context)
     private var wasConnected=false
@@ -154,7 +156,7 @@ class ServiceClient(context:Context,private val targetClass:Class<*>?=null) {
         }
         override fun onServiceDisconnected(name:ComponentName) {synchronized(bindingLock) {invalidateBinding();remote=null;callback=null;clearPendingTests();switchGate.clear();state.value=RuntimeSnapshot(error="后台服务已断开")}}
         // A dead binding never reconnects by itself (e.g. after the APK is updated); rebind so later commands work.
-        override fun onBindingDied(name:ComponentName) {synchronized(bindingLock) {invalidateBinding();remote=null;callback=null;clearPendingTests();switchGate.clear()};submit {if(bound) {runCatching {context.unbindService(this)};bound=false};connect()}}
+        override fun onBindingDied(name:ComponentName) {synchronized(bindingLock) {invalidateBinding();remote=null;callback=null;clearPendingTests();switchGate.clear()};submit {synchronized(bindingLock) {if(bound) {runCatching {context.unbindService(this)};bound=false}};if(!closed)connect()}}
     }
     private fun clearPendingTests() {
         synchronized(testLock) {
@@ -163,22 +165,22 @@ class ServiceClient(context:Context,private val targetClass:Class<*>?=null) {
         }
         if(speedState.value.isNotBlank() && !runCatching { JSONObject(speedState.value).optBoolean("done") }.getOrDefault(true))speedState.value=JSONObject().put("stage","error").put("done",true).put("error","后台服务已断开，请重新测速").toString()
     }
-    private fun bind(target:Class<*>) { if(!bound) {boundClass=target;bound=context.bindService(Intent(context,boundClass),connection,Context.BIND_AUTO_CREATE)} }
+    private fun bind(target:Class<*>) = synchronized(bindingLock) { if(!closed && !bound) {boundClass=target;bound=context.bindService(Intent(context,boundClass),connection,Context.BIND_AUTO_CREATE)} }
     private fun connectNow() {bind(targetClass ?: runningServiceClass(context) ?: serviceClass())}
     fun connect() {submit {connectNow()}}
-    private suspend fun ensureBinding() {connectNow();withTimeout(20000){while(remote==null)delay(50)}}
+    private suspend fun ensureBinding() {connectNow();withTimeout(20000){while(!closed && remote==null)delay(50)};check(!closed){"客户端已关闭"}}
     private suspend fun ensureMode() {
         val next=serviceClass()
         if(bound && boundClass!=next) {
             remote?.command("stop","")
             withTimeout(30000) { while(state.value.state in listOf(1,2,3))delay(50) }
             runCatching {callback?.let {remote?.unregisterCallback(it)}}
-            synchronized(bindingLock) {invalidateBinding();remote=null;callback=null;clearPendingTests()}
-            context.unbindService(connection);bound=false
+            synchronized(bindingLock) {invalidateBinding();remote=null;callback=null;clearPendingTests();if(bound) {context.unbindService(connection);bound=false}}
             state.value=RuntimeSnapshot()
         }
         bind(next)
-        withTimeout(20000) { while(remote==null)delay(50) }
+        withTimeout(20000) { while(!closed && remote==null)delay(50) }
+        check(!closed){"客户端已关闭"}
     }
     private fun connectedRuntime():IRuntime = remote ?: error("后台服务已断开，请重试")
     suspend fun readSnapshot():RuntimeSnapshot {ensureBinding();val runtime=connectedRuntime();return RuntimeSnapshot.parse(runtime.getSnapshot())}
@@ -219,8 +221,8 @@ class ServiceClient(context:Context,private val targetClass:Class<*>?=null) {
             check(remote===runtime) {"后台服务已断开，请重试"};runtime.command("start","")
         } finally {synchronized(bindingLock) {if(foregroundAwaiter?.first==request)foregroundAwaiter=null}}
     }
-    fun start() { submit { ensureMode();startRemote() } }
-    fun stop()=command("stop")
+    fun start() { pendingStop=false;submit { ensureMode();startRemote() } }
+    fun stop() { pendingStop=true;submit { ensureBinding();val runtime=connectedRuntime();pendingStop=false;runtime.command("stop","") } }
     fun reload() { submit { val changed=boundClass!=serviceClass();val running=state.value.state==2;ensureMode();if(changed && running)startRemote() else remote?.command("reload","") } }
     // A pending service-mode edit must not silently switch the bound service.
     fun autoReload() { submit {remote?.command("autoReload","")} }
@@ -303,8 +305,17 @@ class ServiceClient(context:Context,private val targetClass:Class<*>?=null) {
         } catch(e:Exception) { stage.delete();event.emit(e.message ?: "恢复失败") }
     } }
     fun close() {
+        closed=true
+        if(pendingStop) { pendingStop=false;runCatching {remote?.command("stop","")} }
         runCatching {remote?.command("uiVisible","$visibilityToken|false")}
-        commands.close();switchGate.clear();synchronized(bindingLock) {invalidateBinding();clearPendingTests()};runCatching {callback?.let {remote?.unregisterCallback(it)}};callback=null;if(bound) { context.unbindService(connection);bound=false };remote=null;scope.cancel() }
+        commands.close();scope.cancel();switchGate.clear()
+        synchronized(bindingLock) {
+            invalidateBinding();clearPendingTests()
+            runCatching {callback?.let {remote?.unregisterCallback(it)}};callback=null
+            if(bound) { runCatching {context.unbindService(connection)};bound=false }
+            remote=null
+        }
+    }
     companion object {
         // ponytail: serialize group application/tests; foreground work is needed if queues exceed WorkManager's window.
         private val subscriptionApply=Mutex()

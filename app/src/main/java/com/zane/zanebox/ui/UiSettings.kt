@@ -31,10 +31,7 @@ import com.zane.zanebox.data.*
 import org.json.JSONObject
 
 @Composable internal fun SettingsHub(onOpen:(String)->Unit,clashApi:Boolean=false) {
-    Row(Modifier.fillMaxWidth().padding(horizontal=2.dp,vertical=8.dp),horizontalArrangement=Arrangement.SpaceBetween) {
-        Text(uiText("全部设置"),style=MaterialTheme.typography.labelLarge)
-        Text(uiText("已同步"),style=MaterialTheme.typography.labelMedium,color=MaterialTheme.colorScheme.onSurfaceVariant)
-    }
+    UiSection("全部设置")
     val rows=buildList {
         add(listOf("groups","订阅管理","订阅与节点分组",R.drawable.zb_ref_ic_mingcute_group_24,"settings_groups"))
         add(listOf("general","设置","VPN、DNS、TUN 与应用行为",R.drawable.zb_ref_ic_action_settings,"settings_general"))
@@ -46,8 +43,8 @@ import org.json.JSONObject
     }
     UiCard {
         rows.forEachIndexed {i,r->
-            UiRow(r[1] as String,r[2] as String,onClick={onOpen(r[0] as String)},modifier=Modifier.testTag(r[4] as String),iconRes=r[3] as Int,minHeight=58.dp,titleSize=12.sp,chevron=false)
-            if(i<rows.lastIndex)HorizontalDivider(Modifier.padding(start=64.dp,end=16.dp),thickness=.5.dp,color=MaterialTheme.colorScheme.outlineVariant)
+            UiRow(r[1] as String,r[2] as String,onClick={onOpen(r[0] as String)},modifier=Modifier.testTag(r[4] as String),iconRes=r[3] as Int,minHeight=58.dp,titleSize=14.sp,chevron=true)
+            if(i<rows.lastIndex)HorizontalDivider(Modifier.padding(start=50.dp,end=16.dp),thickness=.5.dp,color=MaterialTheme.colorScheme.outlineVariant.copy(alpha=.5f))
         }
     }
 }
@@ -210,9 +207,9 @@ import org.json.JSONObject
     val sections=preferenceSections(data)
     UiPageList("设置",onDismiss) {
         sections.forEach{(title,prefs)->
-            item{Text(uiText(title),Modifier.padding(start=4.dp,top=10.dp,bottom=0.dp),style=MaterialTheme.typography.labelLarge,color=MaterialTheme.colorScheme.primary)}
-            item{Surface(shape=MaterialTheme.shapes.large,color=if(MaterialTheme.colorScheme.background.luminance()>.5f)Color.White else MaterialTheme.colorScheme.surface.copy(alpha=1f)) {
-                Column { prefs.forEachIndexed{index,p->
+            item{UiSection(title)}
+            item{UiCard {
+                prefs.forEachIndexed{index,p->
                     val value=when(p.key){"ipv6Mode"->data.setting("dnsStrategy",if(data.bool("ipv6"))"prefer_ipv4" else "ipv4_only");"uiSkin"->resolvedUiSkin(data.setting(p.key,p.default));"testTimeout"->SettingDefaults.testTimeout(data.setting(p.key,p.default)).toString();else->data.setting(p.key,p.default)}
                     val visual=preferenceAppearance[p.key]
                     val summary=if(p.key=="perAppEnabled")uiText("%s · %s 个应用",uiText(if(!data.bool("perAppEnabled"))"关闭" else if(data.setting("perAppMode","exclude")=="include")"代理" else "绕过"),data.setting("perAppPackages").lines().count{it.isNotBlank()}) else if(p.availability.isNotBlank())uiText(p.availability) else if(p.boolean)uiText(visual?.summary.orEmpty()) else p.choices.firstOrNull{it.first==value}?.second?.let{uiText(it)} ?:value.ifBlank{uiText("未设置")}
@@ -221,11 +218,12 @@ import org.json.JSONObject
                         else if(p.key=="disableMixedInbound" && enabled && data.bool("appendHttpProxy"))vm.message.value="请先关闭追加 HTTP 代理"
                         else if(p.key=="statsEnabled")vm.service.setTrafficEnabled(enabled) else vm.setting(p.key,enabled.toString())
                     }
-                    UiRow(if(p.key=="showBottomBar")p.title else visual?.title ?:p.title,summary,translateSubtitle=false,modifier=Modifier.testTag("setting_${p.key}"),iconRes=visual?.icon ?:0,reserveIcon=true,minHeight=58.dp,chevron=p.key=="perAppEnabled",summaryLines=2,
+                    val hasIcon=(visual?.icon ?: 0)!=0
+                    UiRow(if(p.key=="showBottomBar")p.title else visual?.title ?:p.title,summary,translateSubtitle=false,modifier=Modifier.testTag("setting_${p.key}"),iconRes=visual?.icon ?:0,reserveIcon=false,minHeight=56.dp,chevron=p.key=="perAppEnabled",summaryLines=2,
                         onClick=if(p.availability.isNotBlank())null else ({if(p.key=="perAppEnabled")open("apps") else if(p.boolean)setToggle(!data.bool(p.key,p.default.toBoolean())) else if(p.choices.isNotEmpty())selecting=p else form(visual?.title ?:p.title,listOf(p.title to value)){v->validatePreference(p.key,v[0]);vm.setting(p.key,v[0])}}),
                         trailing=if(p.key=="perAppEnabled")({UiSwitch(data.bool("perAppEnabled"),null,Modifier.testTag("per_app_indicator"))})else if(p.boolean)({Box(Modifier.size(width=48.dp,height=36.dp),contentAlignment=androidx.compose.ui.Alignment.Center){UiSwitch(data.bool(p.key,p.default.toBoolean()),::setToggle,modifier=Modifier)}})else null)
-                    if(index<prefs.lastIndex)HorizontalDivider(Modifier.padding(start=64.dp,end=16.dp),thickness=.5.dp,color=MaterialTheme.colorScheme.outlineVariant.copy(alpha=.4f))
-                }}
+                    if(index<prefs.lastIndex)HorizontalDivider(Modifier.padding(start=if(hasIcon)50.dp else 16.dp,end=16.dp),thickness=.5.dp,color=MaterialTheme.colorScheme.outlineVariant.copy(alpha=.4f))
+                }
             }}
             if(title=="代理共享")item{UiCard{UiRow("局域网地址",lanAddresses());UiRow("共享代理端口",if(data.bool("shareEnabled"))data.setting("sharePort")else data.setting("mixedPort"))}}
         }

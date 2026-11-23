@@ -25,7 +25,7 @@ class OptimizationDnsTest {
         val nodes=(1L..2L).map {Node(it,1,"fixture $it","""{"type":"socks","server":"10.0.2.2","server_port":${19080+it}}""")}
         ZaneStore(context).use{store ->
             store.replace(AppData(nodes=nodes,groups=listOf(Group(1,"g")),rules=listOf(RouteRule(1,"ordinary reject","smart.zanebox.test",outbound="block")),settings=mapOf("selectedNodeId" to "1","factoryRouteDefaultsVersion" to "1","serviceMode" to "vpn","fakeDns" to "true","sniff" to "false","dnsDirect" to "tcp://10.0.2.2:19087","dnsRemote" to "tcp://10.0.2.2:19087","smart.google.target" to "node:2","smartRules.google" to "DOMAIN-SUFFIX,smart.zanebox.test","rulesUpdateInterval" to "off")))
-            shell("appops set com.zane.zanebox ACTIVATE_VPN allow")
+            shell("appops set ${context.packageName} ACTIVATE_VPN allow")
             val client=ServiceClient(context)
             try {
                 client.start();waitFor {client.snapshot.value.state==2}

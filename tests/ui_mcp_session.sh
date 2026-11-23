@@ -11,27 +11,29 @@ AAPT=${AAPT:-${ANDROID_HOME:-$HOME/Library/Android/sdk}/build-tools/35.0.0/aapt}
 version=${ZANE_UI_VERSION:-$(sed -n 's/^versionName=//p' "$root/version.properties")}
 code=${ZANE_UI_VERSION_CODE:-$(sed -n 's/^versionCode=//p' "$root/version.properties")}
 badging=$("$AAPT" dump badging "$apk")
-python3 - "$badging" "$version" "$code" <<'IDENTITY'
+pkg=$(python3 - "$badging" "$version" "$code" <<'IDENTITY'
 import re,sys
 match=re.search(r"^package: name='([^']+)' versionCode='([^']+)' versionName='([^']+)'",sys.argv[1],re.M)
-if not match or match.groups()!=('com.zane.zanebox',sys.argv[3],sys.argv[2]):
-    sys.exit('APK 包名或版本不匹配；必须为声明版本的 com.zane.zanebox Links 包')
+if not match or match.group(1) not in ('com.zane.locus','com.zane.zanebox') or match.groups()[1:]!=(sys.argv[3],sys.argv[2]):
+    sys.exit('APK 包名或版本不匹配；必须为声明版本的 Locus 包')
+print(match.group(1))
 IDENTITY
+)
 "$ADB" -s "$ANDROID_SERIAL" install -r "$apk"
-"$ADB" -s "$ANDROID_SERIAL" shell pm grant com.zane.zanebox android.permission.POST_NOTIFICATIONS
-package=$("$ADB" -s "$ANDROID_SERIAL" shell dumpsys package com.zane.zanebox)
+"$ADB" -s "$ANDROID_SERIAL" shell pm grant "$pkg" android.permission.POST_NOTIFICATIONS
+package=$("$ADB" -s "$ANDROID_SERIAL" shell dumpsys package "$pkg")
 python3 - "$package" "$version" "$code" <<'INSTALLED'
 import re,sys
 name=re.search(r'\bversionName=([^\s]+)',sys.argv[1]); code=re.search(r'\bversionCode=(\d+)',sys.argv[1])
-if not name or not code or (name[1],code[1])!=(sys.argv[2],sys.argv[3]): sys.exit('已安装 Links 的版本不匹配')
+if not name or not code or (name[1],code[1])!=(sys.argv[2],sys.argv[3]): sys.exit('已安装应用的版本不匹配')
 INSTALLED
 done_file="$S25_RUN_DIR/maestro-session.done"
 ui_out="${ZANE_UI_OUT:-$root/reports/ui-$(date +%Y%m%d-%H%M%S)}"
 mkdir -p "$ui_out"
-python3 - "$ui_out" "$done_file" "$ANDROID_SERIAL" "$apk" "$version" "$code" <<'PYSESSION'
+python3 - "$ui_out" "$done_file" "$ANDROID_SERIAL" "$apk" "$version" "$code" "$pkg" <<'PYSESSION'
 import json,pathlib,sys
 out=pathlib.Path(sys.argv[1])
-(out/'session.json').write_text(json.dumps({'serial':sys.argv[3],'done_file':sys.argv[2],'apk':str(pathlib.Path(sys.argv[4]).resolve()),'package':'com.zane.zanebox','versionName':sys.argv[5],'versionCode':int(sys.argv[6])}))
+(out/'session.json').write_text(json.dumps({'serial':sys.argv[3],'done_file':sys.argv[2],'apk':str(pathlib.Path(sys.argv[4]).resolve()),'package':sys.argv[7],'versionName':sys.argv[5],'versionCode':int(sys.argv[6])}))
 PYSESSION
 echo 'MCP_SESSION_READY'
 while [[ ! -e "$done_file" ]]; do sleep 1; done

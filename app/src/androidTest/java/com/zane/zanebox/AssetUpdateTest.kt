@@ -82,7 +82,7 @@ class AssetUpdateTest {
         val vm=ViewModelProvider(screen)[AppViewModel::class.java]
         activity.scenario.onActivity{vm.edit{it.copy(settings=it.settings+mapOf("serviceMode" to "vpn","mixedPort" to "2080","disableMixedInbound" to "false"))}}
         waitFor(10000){!vm.busy.value && vm.data.value.setting("serviceMode")=="vpn"}
-        androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().uiAutomation.executeShellCommand("appops set com.zane.zanebox ACTIVATE_VPN allow").use{java.io.FileInputStream(it.fileDescriptor).readBytes()}
+        androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().uiAutomation.executeShellCommand("appops set ${screen.packageName} ACTIVATE_VPN allow").use{java.io.FileInputStream(it.fileDescriptor).readBytes()}
         val client=vm.service
         try {
             client.start();waitFor{if(client.snapshot.value.state==4)fail(client.snapshot.value.error);client.snapshot.value.state==2}

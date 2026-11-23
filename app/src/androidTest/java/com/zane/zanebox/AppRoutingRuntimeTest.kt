@@ -18,7 +18,7 @@ class AppRoutingRuntimeTest {
         val stored="$probe\ncom.example.linkslocal.one"
         val base=AppData(nodes=listOf(Node(1,1,"A","""{"type":"socks","server":"10.0.2.2","server_port":19081}"""),Node(2,1,"B","""{"type":"socks","server":"10.0.2.2","server_port":19082}""")),groups=listOf(Group(1,"应用范围验收")),settings=mapOf("selectedNodeId" to "1","appLanguage" to "zh-CN","serviceMode" to "vpn","dnsRemote" to "local","dnsDirect" to "local","sniff" to "false","statsEnabled" to "false","bypassLan" to "false","bypassLanInCore" to "false","smartRules.ai" to "","smart.ai.target" to "node:2","smartCustom.ai.packages" to stored)+com.zane.zanebox.config.builtinSmartRuleFiles.keys.filter{it!="ai"}.associate{"smart.$it.target" to "off"})
         val store=ZaneStore(context);store.replace(base)
-        val client=ServiceClient(context);client.connect();shell("appops set com.zane.zanebox ACTIVATE_VPN allow")
+        val client=ServiceClient(context);client.connect();shell("appops set ${context.packageName} ACTIVATE_VPN allow")
         var previousVpnNetwork=""
         fun request(expected:String) {
             val nonce="scope"+System.nanoTime()

@@ -16,8 +16,9 @@ import com.zane.zanebox.data.AppData
 @Composable internal fun ImportDialog(pending:PendingImport,data:AppData,busy:Boolean,onConfirm:(String,Long)->Unit,onDismiss:()->Unit) {
     var name by remember(pending) { mutableStateOf((pending as? PendingImport.Subscription)?.name ?: "导入节点") }
     var groupId by remember(pending) { mutableLongStateOf((pending as? PendingImport.Nodes)?.preferredGroupId ?: -1) }
+    val decodedUrl=remember(pending) { (pending as? PendingImport.Subscription)?.url?.let { raw -> android.net.Uri.decode(raw).ifBlank { raw } }.orEmpty() }
     val (title,body,action)=when(pending) {
-        is PendingImport.Subscription->Triple("添加外部订阅？",uiText("地址：%s\n确认后会新建分组并立即下载该订阅。",pending.url.take(200)),"添加")
+        is PendingImport.Subscription->Triple("添加外部订阅？",uiText("地址：%s\n确认后会新建分组并立即下载该订阅。",decodedUrl.take(200)),"添加")
         is PendingImport.Nodes->Triple("导入外部节点？",uiText("将导入 %s 个节点",pending.report.nodes.size)+(if(pending.report.skipped>0)uiText("，跳过 %s 条无法识别内容",pending.report.skipped) else "")+"：\n"+pending.report.nodes.take(5).joinToString("\n"){"· "+it.name.take(60)},"导入")
         is PendingImport.Backup->Triple("用外部备份替换全部数据？",uiText("备份含 %s 个组、%s 个节点、%s 条规则。\n恢复会覆盖当前节点、订阅和设置。",pending.data.groups.size,pending.data.nodes.size,pending.data.rules.size),"替换")
     }

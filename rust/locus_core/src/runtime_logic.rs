@@ -665,8 +665,12 @@ pub fn smart_target_node_ids(data: &AppData, target: &str) -> Vec<i64> {
 
 pub fn resolve_target_group(data: &AppData, target: &str, service_key: &str) -> Option<TargetGroup> {
     let choice = normalize_smart_target(target);
+    let rule_mode = data.setting("routeMode") == "rule";
     if choice == "auto" {
-        if !service_key.trim().is_empty() {
+        if !service_key.trim().is_empty()
+            && rule_mode
+            && !smart_target_node_ids(data, &choice).is_empty()
+        {
             Some(TargetGroup {
                 tag: format!("smart-{service_key}"),
                 url_test: true,
@@ -679,11 +683,14 @@ pub fn resolve_target_group(data: &AppData, target: &str, service_key: &str) -> 
         let id = rest.parse::<i64>().ok().filter(|&v| v > 0)?;
         let group = data.groups.iter().find(|g| g.enabled && g.id == id)?;
         if !service_key.trim().is_empty() {
-            return Some(TargetGroup {
-                tag: format!("smart-group-{}", group.id),
-                url_test: true,
-                merge_id: 0,
-            });
+            if rule_mode && !smart_target_node_ids(data, &choice).is_empty() {
+                return Some(TargetGroup {
+                    tag: format!("smart-group-{}", group.id),
+                    url_test: true,
+                    merge_id: 0,
+                });
+            }
+            return None;
         }
         let opts: Map<String, Value> = serde_json::from_str::<Value>(&group.options)
             .ok()
@@ -694,7 +701,7 @@ pub fn resolve_target_group(data: &AppData, target: &str, service_key: &str) -> 
             .and_then(Value::as_bool)
             .or_else(|| opts.get("isSelector").and_then(Value::as_bool))
             .unwrap_or(true);
-        if selectable {
+        if selectable && !smart_target_node_ids(data, &choice).is_empty() {
             Some(TargetGroup {
                 tag: format!("group-{}", group.id),
                 url_test: false,
@@ -706,6 +713,9 @@ pub fn resolve_target_group(data: &AppData, target: &str, service_key: &str) -> 
     } else if let Some(rest) = choice.strip_prefix("merge:") {
         let id = rest.parse::<i64>().ok()?;
         let merge = data.merges.iter().find(|m| m.id == id)?;
+        if smart_target_node_ids(data, &choice).is_empty() {
+            return None;
+        }
         Some(TargetGroup {
             tag: format!("merge-{}", merge.id),
             url_test: merge.mode == "urltest",
@@ -743,6 +753,241 @@ pub fn target_plan_create(
         outbounds,
         fingerprint: fp,
     })
+}
+
+pub fn target_plan_create_batch(
+    data: &AppData,
+    targets: &[String],
+    service_key: &str,
+) -> IndexMap<String, TargetPlanData> {
+    if targets.is_empty() {
+        return IndexMap::new();
+    }
+    if !service_key.trim().is_empty() {
+        let mut fallback = IndexMap::with_capacity(targets.len());
+        for t in targets {
+            if let Some(plan) = target_plan_create(data, t, service_key) {
+                fallback.insert(t.clone(), plan);
+            }
+        }
+        return fallback;
+    }
+
+    let enabled_groups: HashSet<i64> = data
+        .groups
+        .iter()
+        .filter(|g| g.enabled)
+        .map(|g| g.id)
+        .collect();
+    let parse_map = |s: &str| -> Map<String, Value> {
+        serde_json::from_str::<Value>(s)
+            .ok()
+            .and_then(|v| v.as_object().cloned())
+            .unwrap_or_default()
+    };
+    let nodes: HashMap<i64, &Node> = data.nodes.iter().map(|n| (n.id, n)).collect();
+    let groups: HashMap<i64, &Group> = data.groups.iter().map(|g| (g.id, g)).collect();
+
+    let mut outbound_maps: HashMap<i64, Map<String, Value>> = HashMap::with_capacity(data.nodes.len());
+    let mut active_ids: HashSet<i64> = HashSet::with_capacity(data.nodes.len());
+    let mut group_member_ids: HashMap<i64, Vec<i64>> = HashMap::new();
+    for n in &data.nodes {
+        let ob_val = serde_json::from_str::<Value>(&n.outbound).ok();
+        let is_not_custom = ob_val
+            .as_ref()
+            .and_then(|v| v.get("type").and_then(Value::as_str).map(|s| s != "custom"))
+            .unwrap_or(true);
+        if enabled_groups.contains(&n.group_id) && is_not_custom {
+            active_ids.insert(n.id);
+        }
+        if let Some(Value::Object(m)) = ob_val {
+            outbound_maps.insert(n.id, m);
+        } else {
+            outbound_maps.insert(n.id, Map::new());
+        }
+        group_member_ids.entry(n.group_id).or_default().push(n.id);
+    }
+    for ids in group_member_ids.values_mut() {
+        ids.sort_unstable();
+    }
+
+    let mut sources: HashMap<(i64, String), &Node> = HashMap::new();
+    for n in data.nodes.iter().rev() {
+        let meta = parse_map(&n.metadata);
+        if let Some(tag) = meta
+            .get("sourceTag")
+            .and_then(Value::as_str)
+            .filter(|s| !s.trim().is_empty())
+        {
+            sources.insert((n.group_id, tag.to_string()), n);
+        }
+    }
+
+    let mut node_snap_cache: HashMap<i64, Value> = HashMap::new();
+    let mut group_snap_cache: HashMap<i64, Value> = HashMap::new();
+    let mut effective_targets_cache: HashMap<i64, crate::chain_routing::ChainTargets> = HashMap::new();
+
+    let mut out = IndexMap::with_capacity(targets.len());
+    for target in targets {
+        let choice = normalize_smart_target(target);
+        let Some(node_id) = choice.strip_prefix("node:").and_then(|s| s.parse::<i64>().ok()) else {
+            if let Some(plan) = target_plan_create(data, target, service_key) {
+                out.insert(target.clone(), plan);
+            }
+            continue;
+        };
+
+        let members = if active_ids.contains(&node_id) {
+            vec![node_id]
+        } else {
+            Vec::new()
+        };
+        let mut outbounds = IndexMap::new();
+        for &id in &members {
+            if let Some(n) = nodes.get(&id) {
+                outbounds.insert(id.to_string(), n.outbound.clone());
+            }
+        }
+
+        let mut seen = BTreeSet::new();
+        let mut used_groups = BTreeSet::new();
+        let mut lookups: Vec<String> = Vec::new();
+        let mut queue: VecDeque<i64> = members.iter().copied().collect();
+        while let Some(id) = queue.pop_front() {
+            if !seen.insert(id) {
+                continue;
+            }
+            let Some(node) = nodes.get(&id).copied() else {
+                continue;
+            };
+            let empty_map = Map::new();
+            let outbound = outbound_maps.get(&id).unwrap_or(&empty_map);
+            if outbound.get("type").and_then(Value::as_str) == Some("chain") {
+                if let Some(ids) = outbound.get("node_ids").and_then(Value::as_array) {
+                    for v in ids {
+                        if let Some(mid) = v.as_i64() {
+                            queue.push_back(mid);
+                        }
+                    }
+                }
+            }
+            if outbound.contains_key("detour") {
+                let tag = outbound
+                    .get("detour")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string();
+                let src = sources.get(&(node.group_id, tag.clone())).copied();
+                let src_str = src
+                    .map(|s| s.id.to_string())
+                    .unwrap_or_else(|| "null".to_string());
+                lookups.push(format!("{}/{tag}={src_str}", node.group_id));
+                if let Some(s) = src {
+                    queue.push_back(s.id);
+                }
+            }
+            if let Some(group) = groups.get(&node.group_id).copied() {
+                used_groups.insert(group.id);
+                let chain_targets = effective_targets_cache
+                    .entry(node.id)
+                    .or_insert_with(|| effective_chain_targets(data, node))
+                    .clone();
+                for t in [&chain_targets.front, &chain_targets.landing] {
+                    if let Some(tid) = t.strip_prefix("node:").and_then(|s| s.parse::<i64>().ok()) {
+                        queue.push_back(tid);
+                    } else if let Some(tid) =
+                        t.strip_prefix("group:").and_then(|s| s.parse::<i64>().ok())
+                    {
+                        used_groups.insert(tid);
+                        let cands = group_member_ids.get(&tid).cloned().unwrap_or_default();
+                        let joined: Vec<String> = cands.iter().map(|i| i.to_string()).collect();
+                        lookups.push(format!("chain/{t}={}", joined.join(",")));
+                        for c in cands {
+                            queue.push_back(c);
+                        }
+                    }
+                }
+            }
+        }
+        lookups.sort();
+        let nodes_snap: Vec<Value> = seen
+            .iter()
+            .map(|id| match nodes.get(id) {
+                Some(n) => node_snap_cache
+                    .entry(*id)
+                    .or_insert_with(|| {
+                        serde_json::json!([
+                            n.id,
+                            n.group_id,
+                            canonical_json_str(&n.outbound),
+                            canonical_json_str(&n.metadata)
+                        ])
+                    })
+                    .clone(),
+                None => Value::Null,
+            })
+            .collect();
+        let groups_snap: Vec<Value> = used_groups
+            .iter()
+            .map(|id| match groups.get(id) {
+                Some(g) => group_snap_cache
+                    .entry(*id)
+                    .or_insert_with(|| {
+                        let mut opts = parse_map(&g.options);
+                        opts.shift_remove("subscriptionRuntime");
+                        opts.shift_remove("subscriptionLastUpdated");
+                        let canonical_opts = canonicalize_json(Value::Object(opts));
+                        serde_json::json!([
+                            g.id,
+                            g.enabled,
+                            g.front_proxy,
+                            g.landing_proxy,
+                            canonical_opts
+                        ])
+                    })
+                    .clone(),
+                None => Value::Null,
+            })
+            .collect();
+        let fp = serde_json::json!([nodes_snap, groups_snap, lookups]).to_string();
+        out.insert(
+            target.clone(),
+            TargetPlanData {
+                target: target.clone(),
+                service_key: String::new(),
+                members,
+                group: None,
+                outbounds,
+                fingerprint: fp,
+            },
+        );
+    }
+    out
+}
+
+fn canonicalize_json(val: Value) -> Value {
+    match val {
+        Value::Object(map) => {
+            let mut sorted: Vec<(String, Value)> = map
+                .into_iter()
+                .map(|(k, v)| (k, canonicalize_json(v)))
+                .collect();
+            sorted.sort_by(|a, b| a.0.cmp(&b.0));
+            let mut out = Map::with_capacity(sorted.len());
+            for (k, v) in sorted {
+                out.insert(k, v);
+            }
+            Value::Object(out)
+        }
+        Value::Array(arr) => Value::Array(arr.into_iter().map(canonicalize_json).collect()),
+        other => other,
+    }
+}
+
+fn canonical_json_str(raw: &str) -> Value {
+    serde_json::from_str::<Value>(raw)
+        .map(canonicalize_json)
+        .unwrap_or_else(|_| Value::String(raw.to_string()))
 }
 
 fn target_link_fingerprint(data: &AppData, members: &[i64]) -> String {
@@ -831,7 +1076,12 @@ fn target_link_fingerprint(data: &AppData, members: &[i64]) -> String {
     let nodes_snap: Vec<Value> = seen
         .iter()
         .map(|id| match nodes.get(id) {
-            Some(n) => serde_json::json!([n.id, n.group_id, n.outbound, n.metadata]),
+            Some(n) => serde_json::json!([
+                n.id,
+                n.group_id,
+                canonical_json_str(&n.outbound),
+                canonical_json_str(&n.metadata)
+            ]),
             None => Value::Null,
         })
         .collect();
@@ -842,7 +1092,8 @@ fn target_link_fingerprint(data: &AppData, members: &[i64]) -> String {
                 let mut opts = parse_map(&g.options);
                 opts.shift_remove("subscriptionRuntime");
                 opts.shift_remove("subscriptionLastUpdated");
-                serde_json::json!([g.id, g.enabled, g.front_proxy, g.landing_proxy, opts])
+                let canonical_opts = canonicalize_json(Value::Object(opts));
+                serde_json::json!([g.id, g.enabled, g.front_proxy, g.landing_proxy, canonical_opts])
             }
             None => Value::Null,
         })

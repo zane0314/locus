@@ -20,10 +20,15 @@ class SmartOrderRuntimeTest {
         store.replace(AppData(nodes=listOf(Node(1,1,"A","""{"type":"socks","server":"10.0.2.2","server_port":19081}""")),groups=listOf(Group(1,"runtime")),settings=settings))
         val holder=androidx.lifecycle.ViewModelStore();lateinit var vm:AppViewModel
         ins.runOnMainSync{vm=AppViewModel(context.applicationContext as Application);holder.put("smart-order",vm)}
-        waitFor("VM ready"){!vm.busy.value && vm.data.value.selectedNodeId==1L};shell("appops set com.zane.zanebox ACTIVATE_VPN allow")
+        waitFor("VM ready"){!vm.busy.value && vm.data.value.selectedNodeId==1L};shell("appops set ${context.packageName} ACTIVATE_VPN allow")
+        var previousVpnNetwork=""
         fun probe(expected:String) {
-            val nonce="order"+System.nanoTime();shell("am start -W -n com.zane.probe/.ProbeActivity --es url http://10.0.2.2:19080/probe --es nonce $nonce")
+            val nonce="order"+System.nanoTime()
+            val previous=if(previousVpnNetwork.isEmpty())"" else " --es previous_vpn_network $previousVpnNetwork"
+            shell("am start -W -n com.zane.probe/.ProbeActivity --es url http://10.0.2.2:19080/probe --es nonce $nonce --ez expected_vpn true$previous")
             var logs="";waitFor("UID出口 $expected"){logs=shell("logcat -d -s ZaneProbe:I");logs.contains("$nonce=")};assertTrue(logs,logs.contains("$nonce=$expected uid="))
+            previousVpnNetwork=Regex("${Regex.escape(nonce)} READY network=(\\d+) vpn=true").find(logs)?.groupValues?.get(1)
+                ?: error("Probe 未确认本轮默认 VPN 网络：$logs")
         }
         try {
             vm.service.start();waitFor("connected"){vm.service.snapshot.value.state==2 || vm.service.snapshot.value.state==4};assertEquals(vm.service.snapshot.value.error,2,vm.service.snapshot.value.state);probe("EXIT_A")

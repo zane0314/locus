@@ -1,7 +1,11 @@
 @file:OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class,androidx.compose.ui.ExperimentalComposeUiApi::class,androidx.compose.foundation.ExperimentalFoundationApi::class)
 package com.zane.zanebox.ui
 
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.selection.toggleable
@@ -10,6 +14,7 @@ import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
@@ -59,28 +64,54 @@ internal val LocalUiReload=staticCompositionLocalOf<(() -> Unit)?> { null }
     }
 }
 
-/** Uses the platform switch shape from the AnyBox settings instead of the M3 outlined track. */
+/** Pure Compose M3-styled switch inside an exact 48x36dp accessible target. */
 @Composable internal fun UiSwitch(checked:Boolean,onCheckedChange:((Boolean)->Unit)?,modifier:Modifier=Modifier,enabled:Boolean=true) {
     val primary=MaterialTheme.colorScheme.primary
     val dark=MaterialTheme.colorScheme.onSurface.luminance()>.5f
-    Box(modifier.size(width=48.dp,height=36.dp).then(if(onCheckedChange==null)Modifier.semantics { role=Role.Switch;toggleableState=if(checked)androidx.compose.ui.state.ToggleableState.On else androidx.compose.ui.state.ToggleableState.Off } else Modifier.toggleable(checked,enabled=enabled,role=Role.Switch,onValueChange=onCheckedChange))) {
-        androidx.compose.ui.viewinterop.AndroidView(
-            factory={android.widget.Switch(it).apply{showText=false;splitTrack=false;isClickable=false;isFocusable=false;importantForAccessibility=android.view.View.IMPORTANT_FOR_ACCESSIBILITY_NO}},
-            modifier=Modifier.fillMaxSize(),
-            update={view->
-                view.setOnCheckedChangeListener(null);view.isChecked=checked;view.isEnabled=enabled
-                val states=arrayOf(intArrayOf(android.R.attr.state_checked),intArrayOf())
-                view.thumbTintList=android.content.res.ColorStateList(states,intArrayOf(primary.toArgb(),if(dark)0xFFBDBDBD.toInt() else 0xFFEEEEEE.toInt()))
-                view.trackTintList=android.content.res.ColorStateList(states,intArrayOf(primary.copy(alpha=.4f).toArgb(),if(dark)0xFF666666.toInt() else 0xFFBDBDBD.toInt()))
-                view.isClickable=false;view.isFocusable=false
-            },
-        )
+    val targetTrack=when {
+        checked && enabled -> primary
+        checked -> primary.copy(alpha=.45f)
+        dark -> androidx.compose.ui.graphics.Color(0xFF2E3138)
+        else -> androidx.compose.ui.graphics.Color(0xFFD5D8DF)
+    }
+    val targetThumb=when {
+        checked -> MaterialTheme.colorScheme.onPrimary
+        dark -> androidx.compose.ui.graphics.Color(0xFFA0A5B1)
+        else -> androidx.compose.ui.graphics.Color.White
+    }
+    val trackColor by animateColorAsState(targetTrack,tween(160),label="switchTrack")
+    val thumbColor by animateColorAsState(targetThumb,tween(160),label="switchThumb")
+    val thumbOffset by animateDpAsState(if(checked)20.dp else 3.dp,tween(160),label="switchOffset")
+    Box(
+        modifier.size(width=48.dp,height=36.dp).then(
+            if(onCheckedChange==null)Modifier.semantics {
+                role=Role.Switch
+                toggleableState=if(checked)androidx.compose.ui.state.ToggleableState.On else androidx.compose.ui.state.ToggleableState.Off
+            } else Modifier.toggleable(checked,enabled=enabled,role=Role.Switch,onValueChange=onCheckedChange)
+        ),
+        contentAlignment=Alignment.Center,
+    ) {
+        Box(
+            Modifier.size(width=40.dp,height=22.dp)
+                .background(trackColor,RoundedCornerShape(11.dp)),
+            contentAlignment=Alignment.CenterStart,
+        ) {
+            Box(
+                Modifier.offset(x=thumbOffset).size(16.dp)
+                    .background(thumbColor,CircleShape)
+            )
+        }
     }
 }
 
 @Composable internal fun UiCard(modifier:Modifier=Modifier,selected:Boolean=false, content:@Composable ColumnScope.()->Unit) {
-    val borderColor=if(selected && skinPalette.name=="linear")skinPrimary.copy(alpha=.65f) else if(skinPalette.name=="linear")skinDivider else MaterialTheme.colorScheme.outlineVariant.copy(alpha=.5f)
-    val borderWidth=if(skinPalette.name=="linear")1.dp else .5.dp
+    val linear=skinPalette.name!="prism"
+    val borderColor=when {
+        selected && linear -> skinPrimary.copy(alpha=.7f)
+        linear -> skinDivider
+        else -> MaterialTheme.colorScheme.outlineVariant.copy(alpha=.5f)
+    }
+    val borderWidth=if(linear)1.dp else .5.dp
     Surface(modifier.fillMaxWidth(),shape=MaterialTheme.shapes.large,
         color=if(selected)skinSelectedSurface else MaterialTheme.colorScheme.surface,
         border=BorderStroke(borderWidth,borderColor)) {
@@ -89,15 +120,15 @@ internal val LocalUiReload=staticCompositionLocalOf<(() -> Unit)?> { null }
 }
 
 @Composable internal fun UiRow(title:String,subtitle:String="",icon:ImageVector?=null,
-    modifier:Modifier=Modifier,onClick:(()->Unit)?=null,trailing:(@Composable ()->Unit)?=null,iconRes:Int=0,minHeight:Dp=68.dp,titleSize:androidx.compose.ui.unit.TextUnit=13.sp,chevron:Boolean=true,reserveIcon:Boolean=false,summaryLines:Int=1,onLongClick:(()->Unit)?=null,translateTitle:Boolean=true,translateSubtitle:Boolean=true) {
+    modifier:Modifier=Modifier,onClick:(()->Unit)?=null,trailing:(@Composable ()->Unit)?=null,iconRes:Int=0,minHeight:Dp=62.dp,titleSize:androidx.compose.ui.unit.TextUnit=14.sp,chevron:Boolean=true,reserveIcon:Boolean=false,summaryLines:Int=1,onLongClick:(()->Unit)?=null,translateTitle:Boolean=true,translateSubtitle:Boolean=true) {
     Row(modifier.fillMaxWidth().then(if(onLongClick!=null)Modifier.combinedClickable(onClick=onClick ?: {},onLongClick=onLongClick) else if(onClick==null) Modifier else Modifier.clickable(onClick=onClick))
         .heightIn(min=minHeight).padding(horizontal=16.dp,vertical=10.dp),verticalAlignment=Alignment.CenterVertically) {
-        if(iconRes!=0 || icon!=null) { if(iconRes!=0)Icon(painterResource(iconRes),null,Modifier.size(24.dp),tint=MaterialTheme.colorScheme.onSurfaceVariant) else Icon(icon!!,null,Modifier.size(24.dp),tint=MaterialTheme.colorScheme.onSurfaceVariant);Spacer(Modifier.width(14.dp)) } else if(reserveIcon)Spacer(Modifier.width(38.dp))
-        Column(Modifier.weight(1f),verticalArrangement=Arrangement.spacedBy(4.dp)) {
-            Text(if(translateTitle)uiText(title)else title,fontSize=titleSize,lineHeight=18.sp,fontWeight=FontWeight.SemiBold)
-            if(subtitle.isNotBlank()) Text(if(translateSubtitle)uiText(subtitle)else subtitle,fontSize=11.sp,lineHeight=14.sp,color=MaterialTheme.colorScheme.onSurfaceVariant,maxLines=summaryLines,overflow=TextOverflow.Ellipsis)
+        if(iconRes!=0 || icon!=null) { if(iconRes!=0)Icon(painterResource(iconRes),null,Modifier.size(22.dp),tint=MaterialTheme.colorScheme.onSurfaceVariant) else Icon(icon!!,null,Modifier.size(22.dp),tint=MaterialTheme.colorScheme.onSurfaceVariant);Spacer(Modifier.width(12.dp)) } else if(reserveIcon)Spacer(Modifier.width(34.dp))
+        Column(Modifier.weight(1f),verticalArrangement=Arrangement.spacedBy(3.dp)) {
+            Text(if(translateTitle)uiText(title)else title,fontSize=titleSize,lineHeight=20.sp,fontWeight=FontWeight.Medium)
+            if(subtitle.isNotBlank()) Text(if(translateSubtitle)uiText(subtitle)else subtitle,fontSize=12.sp,lineHeight=16.sp,color=MaterialTheme.colorScheme.onSurfaceVariant,maxLines=summaryLines,overflow=TextOverflow.Ellipsis)
         }
-        if(trailing!=null)trailing() else if(onClick!=null && chevron)Icon(Icons.Outlined.ChevronRight,null,Modifier.size(20.dp),tint=MaterialTheme.colorScheme.onSurfaceVariant)
+        if(trailing!=null)trailing() else if(onClick!=null && chevron)Icon(Icons.Outlined.ChevronRight,null,Modifier.size(18.dp),tint=MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
 
@@ -114,7 +145,17 @@ internal val LocalUiReload=staticCompositionLocalOf<(() -> Unit)?> { null }
 @Composable internal fun UiMenu(actions:List<Pair<String,()->Unit>>,tag:String="more_menu",circle:Boolean=false) {
     var open by remember { mutableStateOf(false) }
     Box {
-        if(circle)FilledIconButton(onClick={open=true},modifier=Modifier.size(48.dp).testTag(tag),colors=IconButtonDefaults.filledIconButtonColors(containerColor=if(skinPalette.name=="prism")androidx.compose.ui.graphics.Color.White else skinSurfaceElevated,contentColor=skinOnSurface)){Icon(Icons.Outlined.MoreVert,"更多操作")}
+        if(circle) {
+            if(skinPalette.name=="prism") {
+                FilledIconButton(onClick={open=true},modifier=Modifier.size(48.dp).testTag(tag),colors=IconButtonDefaults.filledIconButtonColors(containerColor=androidx.compose.ui.graphics.Color.White,contentColor=skinOnSurface)){Icon(Icons.Outlined.MoreVert,"更多操作")}
+            } else {
+                Box(Modifier.size(48.dp).clickable{open=true}.testTag(tag),contentAlignment=Alignment.Center) {
+                    Surface(Modifier.size(38.dp),shape=RoundedCornerShape(8.dp),color=skinSurfaceElevated,border=BorderStroke(1.dp,skinDivider)) {
+                        Box(contentAlignment=Alignment.Center) { Icon(Icons.Outlined.MoreVert,"更多操作",Modifier.size(20.dp),tint=skinOnSurface) }
+                    }
+                }
+            }
+        }
         else IconButton(onClick={open=true},modifier=Modifier.testTag(tag)) {Icon(Icons.Outlined.MoreVert,"更多操作")}
         DropdownMenu(expanded=open,onDismissRequest={open=false}) {
             actions.forEach { (title,action)-> DropdownMenuItem(text={Text(uiText(title))},onClick={open=false;action()}) }
@@ -149,7 +190,7 @@ internal val LocalUiReload=staticCompositionLocalOf<(() -> Unit)?> { null }
         UiBackdrop(Modifier.fillMaxSize(),home=false)
         Column(Modifier.fillMaxSize().semantics{testTagsAsResourceId=true}.windowInsetsPadding(WindowInsets.safeDrawing.union(navigationInsets))) {
         Scaffold(contentColor=MaterialTheme.colorScheme.onSurface,modifier=Modifier.weight(1f),contentWindowInsets=WindowInsets(0,0,0,0),containerColor=androidx.compose.ui.graphics.Color.Transparent,
-            topBar={TopAppBar(windowInsets=WindowInsets(0,0,0,0),expandedHeight=56.dp,title={Text(uiText(title),fontFamily=MaterialTheme.typography.titleLarge.fontFamily,fontSize=20.sp,maxLines=1,overflow=TextOverflow.Ellipsis,modifier=Modifier.padding(start=16.dp))},navigationIcon={
+            topBar={TopAppBar(windowInsets=WindowInsets(0,0,0,0),expandedHeight=56.dp,title={Text(uiText(title),fontFamily=MaterialTheme.typography.titleLarge.fontFamily,fontSize=20.sp,fontWeight=FontWeight.SemiBold,maxLines=1,overflow=TextOverflow.Ellipsis)},navigationIcon={
                 IconButton(onClick=onDismiss,modifier=Modifier.testTag("page_back")){Icon(Icons.AutoMirrored.Outlined.ArrowBack,"返回")}
             },actions={action?.invoke(this)},colors=TopAppBarDefaults.topAppBarColors(containerColor=androidx.compose.ui.graphics.Color.Transparent))},
             content=content)

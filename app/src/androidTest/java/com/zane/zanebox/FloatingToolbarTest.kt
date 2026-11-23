@@ -14,7 +14,7 @@ class FloatingToolbarTest {
     @Test fun listContinuesBehindThePillAndUnpaintedShouldersPassTapsAtBothFontSizes() {
         val vm=ViewModelProvider(compose.activity)[AppViewModel::class.java]
         val nodes=(1L..40L).map {Node(it,1,"悬浮验收节点 $it","""{"type":"socks","server":"127.0.0.1","server_port":9}""")}
-        compose.runOnIdle {vm.edit {AppData(nodes=nodes,groups=listOf(Group(1,"悬浮验收")),settings=mapOf("appLanguage" to "zh-CN","browseGroupId" to "1","selectedNodeId" to "1"))}}
+        compose.runOnIdle {vm.edit {AppData(nodes=nodes,groups=listOf(Group(1,"悬浮验收")),settings=mapOf("uiSkin" to "prism","appLanguage" to "zh-CN","browseGroupId" to "1","selectedNodeId" to "1"))}}
         compose.waitUntil(10000){!vm.busy.value && vm.data.value.nodes.size==40}
         listOf("1.0","2.0").forEach {scale->
             compose.runOnIdle {vm.setting("fontScale",scale)}

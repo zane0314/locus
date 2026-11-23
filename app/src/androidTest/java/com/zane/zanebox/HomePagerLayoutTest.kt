@@ -80,10 +80,10 @@ class HomePagerLayoutTest {
         val layouts=mutableListOf<androidx.compose.ui.text.TextLayoutResult>()
         compose.onNodeWithTag("home_selected_node",useUnmergedTree=true).performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.GetTextLayoutResult){it(layouts)}
         assertEquals(1,layouts.size)
-        assertEquals(13f,layouts.single().layoutInput.style.fontSize.value,.1f)
+        assertEquals(17f,layouts.single().layoutInput.style.fontSize.value,.1f)
         val density=compose.activity.resources.displayMetrics.density
-        val gap=(compose.onNodeWithTag("group_1").fetchSemanticsNode().boundsInRoot.top-compose.onNodeWithTag("add_nodes").fetchSemanticsNode().boundsInRoot.bottom)/density
-        assertTrue("分组栏应位于右侧按钮下方 8–16dp：${gap}dp",gap in 8f..16f)
+        val gap=(compose.onNodeWithTag("group_1").fetchSemanticsNode().boundsInRoot.top-compose.onNodeWithTag("white_connection_card").fetchSemanticsNode().boundsInRoot.bottom)/density
+        assertTrue("分组栏应位于连接卡片下方 8–16dp：${gap}dp",gap in 8f..16f)
     }
 
     private fun visibleNodeIds():Set<Long> {

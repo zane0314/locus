@@ -2,9 +2,11 @@
 # Invoke only inside this project's with_s25_emulator.sh.
 set -euo pipefail
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
-ADB=${ADB:-${ANDROID_HOME:-$HOME/Library/Android/sdk}/platform-tools/adb}
+if [[ -f "$ROOT/toolchain.conf" ]]; then source "$ROOT/toolchain.conf"; export ANDROID_SDK_ROOT; fi
+ADB=${ADB:-${ANDROID_SDK_ROOT:-${ANDROID_HOME:-$HOME/Library/Android/sdk}}/platform-tools/adb}
+[[ -x "$ADB" ]] || ADB=/opt/homebrew/bin/adb
 OUT=${1:-"$ROOT/reports/emulator-$(date +%Y%m%d-%H%M%S)"}
-classes="${ZANE_TEST_CLASSES:-com.zane.zanebox.AcceptanceTest,com.zane.zanebox.NativeSchemaTest,com.zane.zanebox.LegacyParcelInstrumentedTest,com.zane.zanebox.RuntimeRegressionTest,com.zane.zanebox.SubscriptionBackgroundTest,com.zane.zanebox.ZaneStoreConcurrencyTest,com.zane.zanebox.IncomingIntentTest,com.zane.zanebox.SelectionCacheTest,com.zane.zanebox.DocumentQrTest,com.zane.zanebox.ZaneStoreV2Test,com.zane.zanebox.FunctionFeedbackTest,com.zane.zanebox.PreferenceActionTest,com.zane.zanebox.NodeSwitchLatencyTest,com.zane.zanebox.SelectedNodeDelayUiTest}"
+classes="${ZANE_TEST_CLASSES:-com.zane.zanebox.AcceptanceTest,com.zane.zanebox.NativeSchemaTest,com.zane.zanebox.LegacyParcelInstrumentedTest,com.zane.zanebox.RuntimeRegressionTest,com.zane.zanebox.SubscriptionBackgroundTest,com.zane.zanebox.ZaneStoreConcurrencyTest,com.zane.zanebox.IncomingIntentTest,com.zane.zanebox.SelectionCacheTest,com.zane.zanebox.DocumentQrTest,com.zane.zanebox.ZaneStoreV2Test,com.zane.zanebox.FunctionFeedbackTest,com.zane.zanebox.PreferenceActionTest,com.zane.zanebox.NodeSwitchLatencyTest,com.zane.zanebox.SelectedNodeDelayUiTest,com.zane.zanebox.V101AcceptanceInstrumentedTest}"
 mkdir -p "$OUT"
 rm -f "$OUT/result.json"
 APK="$ROOT/app/build/outputs/apk/debug/app-debug.apk"
@@ -24,10 +26,11 @@ start_fixture() {
     python3 - "$ports" <<'FREE'
 import socket, sys
 for port in map(int,sys.argv[1].split(',')):
-    with socket.socket() as sock:
-        sock.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)
-        try: sock.bind(('127.0.0.1',port))
-        except OSError as error: sys.exit(f'夹具端口 {port} 不可用，未运行测试：{error}')
+    for host in ('127.0.0.1','0.0.0.0'):
+        with socket.socket() as sock:
+            sock.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)
+            try: sock.bind((host,port))
+            except OSError as error: sys.exit(f'夹具端口 {port} 不可用，未运行测试：{error}')
 FREE
     python3 "$ROOT/tests/$name.py" "$@" --log "$OUT/$name.jsonl" >"$OUT/$name.stderr" 2>&1 &
     pid=$!; fixtures+=("$pid")
@@ -55,6 +58,11 @@ READY
     kill -0 "$pid"
 }
 network_args=(--delay-a-ms "${ZANE_FIXTURE_DELAY_A_MS:-0}" --delay-b-ms "${ZANE_FIXTURE_DELAY_B_MS:-0}")
+if [[ -z "${ZANE_FIXTURE_GEOIP:-}" && -f "$ROOT/app/src/main/assets/sing-box/geoip.db.xz" ]]; then
+    python3 -c 'import lzma, pathlib, sys; pathlib.Path(sys.argv[2]).write_bytes(lzma.decompress(pathlib.Path(sys.argv[1]).read_bytes()))' \
+        "$ROOT/app/src/main/assets/sing-box/geoip.db.xz" "$OUT/geoip-fixture.db"
+    ZANE_FIXTURE_GEOIP="$OUT/geoip-fixture.db"
+fi
 if [[ -n "${ZANE_FIXTURE_GEOIP:-}" ]]; then network_args+=(--geoip-fixture "$ZANE_FIXTURE_GEOIP"); fi
 start_fixture network_fixture '19080,19081,19082,19085,19086,19087,19088,19089' "${network_args[@]}"
 case "$classes" in
@@ -63,11 +71,22 @@ esac
 "$ADB" install -r "$APK" >"$OUT/install.txt"
 "$ADB" install -r "$TEST" >>"$OUT/install.txt"
 "$ADB" install -r "$PROBE" >>"$OUT/install.txt"
+case "$classes" in
+    *AppPickerTest*|*AppFeatureTest*|*AppRoutingRuntimeTest*)
+        if [[ -f "$ROOT/tests/install_app_picker_fixtures.py" ]]; then
+            python3 "$ROOT/tests/install_app_picker_fixtures.py" --adb "$ADB" --out "$OUT/app-picker-fixtures" >>"$OUT/install.txt" 2>&1
+        fi
+        ;;
+esac
 "$ADB" shell pm clear com.zane.locus >>"$OUT/install.txt"
 "$ADB" shell pm grant com.zane.locus android.permission.POST_NOTIFICATIONS
-# Fixtures have controlled local exits; public reachability probes must not change network scores.
+"$ADB" shell appops set com.zane.locus ACTIVATE_VPN allow || true
+"$ADB" reverse tcp:19082 tcp:19082 || true
+# Fixtures have controlled local exits; public reachability probes and simulated cellular flaps must not change network scores.
 "$ADB" shell settings put global captive_portal_mode 0
 "$ADB" shell settings put global private_dns_mode off
+"$ADB" shell svc data disable || true
+"$ADB" shell svc wifi enable || true
 "$ADB" logcat -c
 set +e
 "$ADB" shell am instrument -w -r -e class "$classes" com.zane.locus.test/androidx.test.runner.AndroidJUnitRunner >"$OUT/instrumentation.txt" 2>&1

@@ -504,7 +504,7 @@ private val translations=mapOf(
     "应用修改" to tr("应用修改","套用修改","Apply Changes"),
     "代理未连接" to tr("代理未连接","代理未連線","Proxy disconnected"),
     "代理已连接" to tr("代理已连接","代理已連線","Proxy connected"),
-    "简洁留白" to tr("简洁留白","簡潔留白","Clean White"),
+    "深夜线条" to tr("深夜线条","深夜線條","Obsidian Line"),
     "VPN 模式" to tr("VPN 模式","VPN 模式","VPN mode"),
     "重试连接" to tr("重试连接","重試連線","Retry connection"),
     "正在连接" to tr("正在连接","正在連線","Connecting"),

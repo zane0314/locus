@@ -1,4 +1,4 @@
-use crate::json_depth::require_json_depth;
+use crate::json_depth::parse_lenient_json;
 use crate::share_uri::{
     decode_base64_utf8, hysteria_hop_interval, percent_decode, socks_user_info, ShareUri,
 };
@@ -84,9 +84,7 @@ fn parse_internal(text: &str, depth: usize, skips: &mut Skips) -> Result<Vec<Par
     }
 
     if text.starts_with('{') || text.starts_with('[') {
-        require_json_depth(text)?;
-        let parsed: Value =
-            serde_json::from_str(text).map_err(|e| format!("JSON 格式无效: {e}"))?;
+        let parsed: Value = parse_lenient_json(text)?;
         let items: Vec<Value> = match parsed {
             Value::Array(arr) => arr,
             Value::Object(root) => {
@@ -301,8 +299,7 @@ fn checked_json_obj(text: &str) -> Result<Map<String, Value>, String> {
     if text.len() > LIMIT {
         return Err("订阅超过解析限制".to_string());
     }
-    require_json_depth(text)?;
-    let val: Value = serde_json::from_str(text).map_err(|e| format!("JSON 无效: {e}"))?;
+    let val: Value = parse_lenient_json(text)?;
     match val {
         Value::Object(m) => Ok(m),
         _ => Err("JSON 必须是对象".to_string()),
