@@ -786,6 +786,7 @@ class ZaneRuntime(private val owner:Service,private val vpn:VpnService?):Context
         val requested=if(targetRequest!=null)plan?.members.orEmpty() else (0 until ids.length()).map { ids.getLong(it) }.distinct()
         require(requested.size<=10000)
         val selected=requested.filter { it in outbounds }
+        val selectedSet=selected.toSet()
         val memberPlans=TargetPlan.createBatch(data,selected.map { "node:$it" }).mapKeys { it.key.removePrefix("node:").toLong() }
         val batchId=++testSequence
         val remaining=selected.toMutableSet()
@@ -820,7 +821,12 @@ class ZaneRuntime(private val owner:Service,private val vpn:VpnService?):Context
                         }
                         return id in validIds
                     }
-                    store.updateNodeStatus(updates,preserveSort=quiet,validate={current,update->checkValid(current,update.id)})
+                    store.updateNodeStatus(
+                        updates,
+                        preserveSort=quiet,
+                        validate={current,update->checkValid(current,update.id)},
+                        expand={current,valid->expandLatencySyncUpdates(current,valid,selectedSet)},
+                    )
                     val currentNodes=store.snapshot().nodes.associateBy { it.id }
                     updates.forEach { update ->
                         remaining.remove(update.id);completed++

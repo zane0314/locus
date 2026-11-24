@@ -2,6 +2,8 @@ package com.zane.zanebox.runtime
 
 import com.zane.zanebox.core.RustCore
 import com.zane.zanebox.data.AppData
+import com.zane.zanebox.data.NodeStatusUpdate
+import org.json.JSONArray
 import org.json.JSONObject
 
 /** The sing-box group a routing target resolves to; null means the target only reports latency. */
@@ -22,6 +24,33 @@ internal fun restorableSelectorChoices(data: AppData, config: String): Map<Strin
         JSONObject().put("data", data.toJson()).put("config", config),
     )
     return obj.keys().asSequence().associateWith { obj.getString(it) }
+}
+
+internal fun expandLatencySyncUpdates(
+    data: AppData,
+    valid: List<NodeStatusUpdate>,
+    excludedIds: Set<Long>,
+): List<NodeStatusUpdate> {
+    if (valid.isEmpty()) return valid
+    val obj = RustCore.callObject(
+        "latencySyncSiblings",
+        JSONObject()
+            .put("data", data.toRustJson())
+            .put("testedIds", JSONArray(valid.map { it.id }))
+            .put("excludedIds", JSONArray(excludedIds.toList())),
+    )
+    if (obj.length() == 0) return valid
+    val byId = data.nodes.associateBy { it.id }
+    val extras = LinkedHashMap<Long, NodeStatusUpdate>()
+    valid.forEach { update ->
+        val arr = obj.optJSONArray(update.id.toString()) ?: return@forEach
+        for (i in 0 until arr.length()) {
+            val sid = arr.getLong(i)
+            val node = byId[sid] ?: continue
+            extras[sid] = NodeStatusUpdate(sid, node.outbound, update.ping, update.status)
+        }
+    }
+    return if (extras.isEmpty()) valid else valid + extras.values
 }
 
 internal class TargetPlan private constructor(

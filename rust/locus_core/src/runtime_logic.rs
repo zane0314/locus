@@ -1,9 +1,11 @@
 use crate::chain_routing::effective_chain_targets;
 use crate::models::{AppData, Group, MergeGroup, Node};
+use crate::node_identity::node_identity_key;
 use crate::route_rules::{normalize_smart_target, smart_policy_keys, smart_target};
 use indexmap::{IndexMap, IndexSet};
 use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value};
+use serde_json::{json, Map, Value};
+use sha2::{Digest, Sha256};
 use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 
 pub const TRAFFIC_MAX_BYTES: usize = 4 * 1024 * 1024;
@@ -1369,4 +1371,205 @@ pub fn smart_panel_summary(data: &AppData, testing: &HashSet<i64>) -> SmartPanel
         auto_node_count,
         policies,
     }
+}
+
+fn resolve_node_route_key(
+    node_id: i64,
+    data: &AppData,
+    nodes: &HashMap<i64, &Node>,
+    groups: &HashMap<i64, &Group>,
+    sources: &HashMap<(i64, String), &Node>,
+    visiting: &mut HashSet<i64>,
+    cache: &mut HashMap<i64, Option<String>>,
+) -> Option<String> {
+    if let Some(cached) = cache.get(&node_id) {
+        return cached.clone();
+    }
+    if !visiting.insert(node_id) {
+        return None;
+    }
+    let result = (|| -> Option<String> {
+        let node = nodes.get(&node_id).copied()?;
+        let group = groups.get(&node.group_id).copied()?;
+        let outbound = serde_json::from_str::<Value>(&node.outbound).ok()?;
+        let obj = outbound.as_object()?;
+        let otype = obj.get("type").and_then(Value::as_str).unwrap_or("");
+        if otype == "custom" {
+            return None;
+        }
+        let body_sig = if otype == "chain" {
+            let hops = obj.get("node_ids").and_then(Value::as_array)?;
+            if hops.is_empty() {
+                return None;
+            }
+            let mut hop_keys = Vec::with_capacity(hops.len());
+            for hop in hops {
+                let hid = hop.as_i64()?;
+                hop_keys.push(resolve_node_route_key(
+                    hid, data, nodes, groups, sources, visiting, cache,
+                )?);
+            }
+            json!(["chain", hop_keys])
+        } else {
+            let id_key = node_identity_key(&node.outbound).ok()?;
+            let detour = obj
+                .get("detour")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .unwrap_or("");
+            let detour_sig = if detour.is_empty() || detour == "direct" {
+                Value::Null
+            } else if let Some(src) = sources.get(&(node.group_id, detour.to_string())).copied() {
+                let src_key = resolve_node_route_key(
+                    src.id, data, nodes, groups, sources, visiting, cache,
+                )?;
+                json!(["node", src_key])
+            } else {
+                json!(["missing", detour])
+            };
+            json!(["outbound", id_key, detour_sig])
+        };
+
+        let dns_resolver = serde_json::from_str::<Value>(&group.options)
+            .ok()
+            .and_then(|v| {
+                v.get("serverDnsResolver")
+                    .and_then(Value::as_str)
+                    .map(|s| s.trim().to_string())
+            })
+            .unwrap_or_default();
+        let custom_cfg = serde_json::from_str::<Value>(&node.metadata)
+            .ok()
+            .and_then(|v| v.get("customConfig").cloned())
+            .map(canonicalize_json)
+            .unwrap_or(Value::Null);
+        let targets = effective_chain_targets(data, node);
+        let mut chain_sig = |target: &str| -> Option<Value> {
+            if target == "none" {
+                Some(Value::Null)
+            } else if let Some(rest) = target.strip_prefix("node:") {
+                let tid = rest.parse::<i64>().ok()?;
+                let tkey = resolve_node_route_key(
+                    tid, data, nodes, groups, sources, visiting, cache,
+                )?;
+                Some(json!(["node", tkey]))
+            } else if let Some(rest) = target.strip_prefix("group:") {
+                let gid = rest.parse::<i64>().ok()?;
+                Some(json!(["group", gid]))
+            } else {
+                None
+            }
+        };
+        let front_sig = chain_sig(&targets.front)?;
+        let landing_sig = chain_sig(&targets.landing)?;
+        let raw = json!([body_sig, dns_resolver, custom_cfg, front_sig, landing_sig]).to_string();
+        let digest = Sha256::digest(raw.as_bytes());
+        let mut hex = String::with_capacity(64);
+        for b in digest {
+            use std::fmt::Write;
+            let _ = write!(&mut hex, "{b:02x}");
+        }
+        Some(hex)
+    })();
+    visiting.remove(&node_id);
+    cache.insert(node_id, result.clone());
+    result
+}
+
+/// Maps each tested node ID to untested enabled sibling node IDs sharing the exact same effective
+/// proxy route (canonical outbound, resolved detour, server DNS resolver, customConfig, and
+/// effective front/landing chain). Distinctly named nodes in the same group are never conflated.
+pub fn latency_sync_sibling_ids(
+    data: &AppData,
+    tested_ids: &[i64],
+    excluded_ids: &HashSet<i64>,
+) -> IndexMap<String, Vec<i64>> {
+    if tested_ids.is_empty() {
+        return IndexMap::new();
+    }
+    let enabled_groups: HashSet<i64> = data
+        .groups
+        .iter()
+        .filter(|g| g.enabled)
+        .map(|g| g.id)
+        .collect();
+    let candidates: Vec<&Node> = data
+        .nodes
+        .iter()
+        .filter(|n| enabled_groups.contains(&n.group_id) && !excluded_ids.contains(&n.id))
+        .collect();
+    if candidates.is_empty() {
+        return IndexMap::new();
+    }
+
+    let nodes: HashMap<i64, &Node> = data.nodes.iter().map(|n| (n.id, n)).collect();
+    let groups: HashMap<i64, &Group> = data.groups.iter().map(|g| (g.id, g)).collect();
+    let mut sources: HashMap<(i64, String), &Node> = HashMap::new();
+    for n in data.nodes.iter().rev() {
+        if let Some(tag) = serde_json::from_str::<Value>(&n.metadata)
+            .ok()
+            .and_then(|v| {
+                v.get("sourceTag")
+                    .and_then(Value::as_str)
+                    .filter(|s| !s.trim().is_empty())
+                    .map(str::to_string)
+            })
+        {
+            sources.insert((n.group_id, tag), n);
+        }
+    }
+
+    let mut cache: HashMap<i64, Option<String>> = HashMap::new();
+    let mut visiting = HashSet::new();
+    let mut tested_entries: Vec<(&Node, String)> = Vec::new();
+    let mut needed_keys: HashSet<String> = HashSet::new();
+    for &tid in tested_ids {
+        let Some(&node) = nodes.get(&tid) else { continue };
+        if let Some(key) = resolve_node_route_key(
+            tid,
+            data,
+            &nodes,
+            &groups,
+            &sources,
+            &mut visiting,
+            &mut cache,
+        ) {
+            needed_keys.insert(key.clone());
+            tested_entries.push((node, key));
+        }
+    }
+    if tested_entries.is_empty() {
+        return IndexMap::new();
+    }
+
+    let mut candidates_by_key: HashMap<String, Vec<&Node>> = HashMap::new();
+    for &cand in &candidates {
+        if let Some(key) = resolve_node_route_key(
+            cand.id,
+            data,
+            &nodes,
+            &groups,
+            &sources,
+            &mut visiting,
+            &mut cache,
+        ) {
+            if needed_keys.contains(&key) {
+                candidates_by_key.entry(key).or_default().push(cand);
+            }
+        }
+    }
+
+    let mut out = IndexMap::new();
+    for (tested, key) in tested_entries {
+        let Some(matches) = candidates_by_key.get(&key) else { continue };
+        let siblings: Vec<i64> = matches
+            .iter()
+            .filter(|c| c.id != tested.id && (c.group_id != tested.group_id || c.name == tested.name))
+            .map(|c| c.id)
+            .collect();
+        if !siblings.is_empty() {
+            out.insert(tested.id.to_string(), siblings);
+        }
+    }
+    out
 }

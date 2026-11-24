@@ -54,7 +54,7 @@ import org.json.JSONObject
         else if(!none)addAll(listOf("proxy" to "代理","direct" to "直连","block" to "阻止").map{it.first to uiText(it.second)})
         data.groups.filter{it.enabled}.forEach{add("group:${it.id}" to uiText("分组 · %s",it.name))}
         data.merges.forEach{add("merge:${it.id}" to uiText("汇总组 · %s",it.name))}
-        if(!smart)data.nodes.filter{n->data.groups.any{it.id==n.groupId && it.enabled}}.forEach{add("node:${it.id}" to it.name)}
+        if(!smart)data.nodes.filter{n->data.groups.any{it.id==n.groupId && it.enabled}}.forEach{add("node:${it.id}" to targetName("node:${it.id}",data))}
     }
     val selected=if(smart && value.startsWith("node:"))data.nodes.firstOrNull{it.id==value.substringAfter(':').toLongOrNull()}?.let{"group:${it.groupId}"} ?: value
         else if(smart)normalizeSmartTarget(value)else value
@@ -72,7 +72,18 @@ internal fun targetName(value:String,data:AppData,language:String="zh-CN"):Strin
     }
     if(fixed!=null)return translateText(fixed,language)
     return when(value.substringBefore(':')) {
-        "node"->data.nodes.firstOrNull{it.id==value.substringAfter(':').toLongOrNull()}?.name ?: translateText("节点已删除",language)
+        "node"-> {
+            val node=data.nodes.firstOrNull{it.id==value.substringAfter(':').toLongOrNull()}
+                ?: return translateText("节点已删除",language)
+            val enabledIds=data.groups.filter{it.enabled}.mapTo(HashSet()){it.id}
+            val duplicateAcrossGroups=data.nodes.any {
+                it.id!=node.id && it.name==node.name && it.groupId!=node.groupId && it.groupId in enabledIds
+            }
+            if(duplicateAcrossGroups) {
+                val groupName=data.groups.firstOrNull{it.id==node.groupId}?.name.orEmpty()
+                if(groupName.isNotBlank())"$groupName · ${node.name}" else node.name
+            } else node.name
+        }
         "group"->data.groups.firstOrNull{it.id==value.substringAfter(':').toLongOrNull()}?.name ?: translateText("分组已删除",language)
         "merge"->data.merges.firstOrNull{it.id==value.substringAfter(':').toLongOrNull()}?.name ?: translateText("汇总组已删除",language)
         else->value

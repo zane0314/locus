@@ -4,6 +4,7 @@ import com.zane.zanebox.config.ConfigBuilder
 import com.zane.zanebox.data.*
 import com.zane.zanebox.runtime.TargetGroup
 import com.zane.zanebox.runtime.TargetPlan
+import com.zane.zanebox.runtime.expandLatencySyncUpdates
 import com.zane.zanebox.runtime.restorableSelectorChoices
 import com.zane.zanebox.runtime.savedChoiceDelay
 import com.zane.zanebox.ui.targetLatencyLabel
@@ -149,5 +150,29 @@ class TargetLatencyPlanTest {
         assertEquals(mapOf("merge-10" to "node-1"),restore(marked.copy(settings=marked.settings+("groupSelection.group-1" to "node-3"))))
         // A merge switched to urltest is no longer a selector.
         assertEquals(mapOf("group-1" to "node-1"),restore(marked.copy(merges=marked.merges.map { if(it.id==10L)it.copy(mode="urltest") else it })))
+    }
+
+    @Test fun latencySyncExpandsToEquivalentConfigCopiesOnly() {
+        val sameA="""{"type":"socks","server":"127.0.0.1","server_port":10001}"""
+        val sameB="""{"server_port":10001,"server":"127.0.0.1","type":"socks","tag":"other"}"""
+        val diff="""{"type":"socks","server":"127.0.0.1","server_port":10002}"""
+        val data=AppData(
+            nodes=listOf(
+                Node(1,1,"Goole 台湾",sameA,ping=103,status=3),
+                Node(2,2,"Goole 台湾",sameB,ping=103,status=3),
+                Node(3,2,"Goole 台湾",diff,ping=103,status=3),
+                Node(4,1,"不同名同配置",sameA,ping=-1,status=0),
+                Node(5,3,"Goole 台湾",sameA,ping=103,status=3),
+            ),
+            groups=listOf(
+                Group(1,"主订阅","https://example.test/a"),
+                Group(2,"自建"),
+                Group(3,"链式分组",frontProxy=3,options="""{"chain":{"front":"node:3","landing":"none"}}"""),
+            ),
+        )
+        val expanded=expandLatencySyncUpdates(data,listOf(NodeStatusUpdate(1,sameA,131,3)),setOf(1L))
+        assertEquals(setOf(1L,2L),expanded.map { it.id }.toSet())
+        assertEquals(131,expanded.first { it.id==2L }.ping)
+        assertEquals(sameB,expanded.first { it.id==2L }.outbound)
     }
 }

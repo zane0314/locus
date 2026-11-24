@@ -34,4 +34,23 @@ class SmartTargetSelectionTest {
         }
         assertEquals("代理",targetName("proxy",data))
     }
+
+    @Test fun duplicateNodeNamesAcrossEnabledGroupsShowGroupPrefix() {
+        val dup=AppData(
+            nodes=listOf(
+                Node(1,1,"Goole 台湾","""{"type":"socks","server":"127.0.0.1","server_port":10001}"""),
+                Node(2,2,"Goole 台湾","""{"type":"socks","server":"127.0.0.1","server_port":10002}"""),
+                Node(3,1,"唯一节点","""{"type":"socks","server":"127.0.0.1","server_port":10003}"""),
+                Node(4,3,"唯一节点","""{"type":"socks","server":"127.0.0.1","server_port":10004}"""),
+            ),
+            groups=listOf(
+                Group(1,"主订阅","https://example.test/a"),
+                Group(2,"自建节点"),
+                Group(3,"停用分组",enabled=false),
+            ),
+        )
+        assertEquals("主订阅 · Goole 台湾",targetName("node:1",dup))
+        assertEquals("自建节点 · Goole 台湾",targetName("node:2",dup))
+        assertEquals("唯一节点",targetName("node:3",dup))
+    }
 }

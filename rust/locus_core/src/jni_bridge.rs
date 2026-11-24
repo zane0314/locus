@@ -20,8 +20,8 @@ use crate::route_rules::{
     rule_set_format, smart_policy_keys, smart_target, with_factory_route_defaults,
 };
 use crate::runtime_logic::{
-    active_url_test_groups, chain_parent_probes, chain_probe_keys, node_test_label,
-    parse_traffic_samples, read_chain_probe_plans, reorder_visible_ids,
+    active_url_test_groups, chain_parent_probes, chain_probe_keys, latency_sync_sibling_ids,
+    node_test_label, parse_traffic_samples, read_chain_probe_plans, reorder_visible_ids,
     restorable_selector_choices, routed_chain_nodes, sampling_tracked_tags, saved_choice_delay,
     smart_lowest_node, smart_panel_summary, smart_target_node_ids, target_latency_label,
     target_plan_create, target_plan_create_batch, traffic_domain,
@@ -656,6 +656,21 @@ fn dispatch(op: &str, body: &str) -> Result<Value, String> {
                 Some(v) => serde_json::from_value(v.clone()).map_err(|e| e.to_string())?,
             };
             Ok(json!(smart_panel_summary(&data, &testing)))
+        }
+        "latencySyncSiblings" => {
+            let req = parse_req(body)?;
+            let data = req_app_data(&req, "data")?;
+            let tested_ids: Vec<i64> =
+                serde_json::from_value(req["testedIds"].clone()).map_err(|e| e.to_string())?;
+            let excluded_ids: HashSet<i64> = match req.get("excludedIds") {
+                Some(Value::Null) | None => HashSet::new(),
+                Some(v) => serde_json::from_value(v.clone()).map_err(|e| e.to_string())?,
+            };
+            Ok(json!(latency_sync_sibling_ids(
+                &data,
+                &tested_ids,
+                &excluded_ids
+            )))
         }
 
         other => Err(format!("未知 RustCore 操作: {other}")),

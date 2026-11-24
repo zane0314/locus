@@ -447,4 +447,70 @@ proxies:
         assert_eq!(yt_unmeasured.latency_label.as_deref(), Some("未测试"));
         assert_eq!(yt_unmeasured.lowest_ping, -1);
     }
+
+    #[test]
+    fn latency_sync_siblings_match_equivalent_routes_and_respect_boundaries() {
+        use crate::runtime_logic::latency_sync_sibling_ids;
+        use std::collections::HashSet;
+
+        let mk_group = |id: i64, name: &str, enabled: bool, front_proxy: i64, options: &str| Group {
+            id,
+            name: name.into(),
+            subscription_url: String::new(),
+            enabled,
+            order: 0,
+            updated_at: 0,
+            user_info: String::new(),
+            front_proxy,
+            landing_proxy: 0,
+            options: options.into(),
+        };
+        let mk_node = |id: i64, group_id: i64, name: &str, outbound: &str| Node {
+            id,
+            group_id,
+            name: name.into(),
+            outbound: outbound.into(),
+            share_link: String::new(),
+            ping: -1,
+            tx: 0,
+            rx: 0,
+            order: 0,
+            status: 0,
+            metadata: "{}".into(),
+        };
+
+        let tw_a = r#"{"type":"vless","server":"tw.example.com","server_port":443,"uuid":"11111111-1111-1111-1111-111111111111"}"#;
+        let tw_b_reordered = r#"{"uuid":"11111111-1111-1111-1111-111111111111","server_port":443,"server":"tw.example.com","type":"vless","tag":"ignored"}"#;
+        let tw_other_port = r#"{"type":"vless","server":"tw.example.com","server_port":8443,"uuid":"11111111-1111-1111-1111-111111111111"}"#;
+        let front_socks = r#"{"type":"socks","server":"10.0.0.1","server_port":1080}"#;
+        let data = AppData {
+            groups: vec![
+                mk_group(1, "G1", true, 0, "{}"),
+                mk_group(2, "G2", true, 0, "{}"),
+                mk_group(3, "G3-Chain", true, 99, r#"{"chain":{"front":"node:99","landing":"none"}}"#),
+                mk_group(4, "G4-Dns", true, 0, r#"{"serverDnsResolver":"https://1.1.1.1/dns-query"}"#),
+                mk_group(5, "G5-Off", false, 0, "{}"),
+            ],
+            nodes: vec![
+                mk_node(10, 1, "Goole 台湾", tw_a),
+                mk_node(11, 1, "Goole 台湾", tw_b_reordered),
+                mk_node(12, 1, "Different Name", tw_a),
+                mk_node(20, 2, "Goole 台湾", tw_b_reordered),
+                mk_node(21, 2, "TW-Alias", tw_a),
+                mk_node(22, 2, "Goole 台湾", tw_other_port),
+                mk_node(30, 3, "Goole 台湾", tw_a),
+                mk_node(40, 4, "Goole 台湾", tw_a),
+                mk_node(50, 5, "Goole 台湾", tw_a),
+                mk_node(99, 1, "Front", front_socks),
+            ],
+            ..AppData::default()
+        };
+
+        let result = latency_sync_sibling_ids(&data, &[10], &HashSet::from([10]));
+        assert_eq!(result.get("10"), Some(&vec![11, 20, 21]));
+
+        // Excluded nodes (e.g. also scheduled in this batch) are skipped.
+        let excluded = latency_sync_sibling_ids(&data, &[10], &HashSet::from([10, 20]));
+        assert_eq!(excluded.get("10"), Some(&vec![11, 21]));
+    }
 }

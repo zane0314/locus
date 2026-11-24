@@ -126,7 +126,12 @@ class ZaneStore(context:Context,databaseName:String="zanebox.db",autoLoad:Boolea
     }
     fun replace(data:AppData):AppData = update { data }
     /** Automatic results retain the pre-test sort ping in kv; manual results release it. Both commit atomically. */
-    @Synchronized fun updateNodeStatus(updates:List<NodeStatusUpdate>,preserveSort:Boolean=false,validate:(AppData,NodeStatusUpdate)->Boolean={_,_->true}):Int {
+    @Synchronized fun updateNodeStatus(
+        updates:List<NodeStatusUpdate>,
+        preserveSort:Boolean=false,
+        validate:(AppData,NodeStatusUpdate)->Boolean={_,_->true},
+        expand:(AppData,List<NodeStatusUpdate>)->List<NodeStatusUpdate> = {_,valid->valid},
+    ):Int {
         if(updates.isEmpty()) return 0
         val db=writableDatabase;db.beginTransaction()
         var next:Cache?=null;var changed=0
@@ -134,8 +139,10 @@ class ZaneStore(context:Context,databaseName:String="zanebox.db",autoLoad:Boolea
             val current=load(db);val nodes=current.base.nodes.associateBy { it.id }
             val status=HashMap(current.status)
             val kv=HashMap(current.kv)
-            updates.forEach { update ->
-                if(nodes[update.id]?.outbound!=update.outbound || !validate(current.merged,update)) return@forEach
+            val valid=updates.filter { update -> nodes[update.id]?.outbound==update.outbound && validate(current.merged,update) }
+            val effective=if(valid.isEmpty()) emptyList() else expand(current.merged,valid)
+            effective.forEach { update ->
+                if(nodes[update.id]?.outbound!=update.outbound) return@forEach
                 val previous=status[update.id] ?: DEFAULT;val value=previous.copy(ping=update.ping,status=update.status)
                 val sortKey="sort_ping_${update.id}"
                 if(preserveSort) { if(value!=previous && sortKey !in kv)kv[sortKey]=previous.ping.toString() }
