@@ -35,7 +35,7 @@ class AppFeatureTest {
         scroll("apps_auto");compose.waitUntil(15000){!compose.onNodeWithTag("apps_auto").fetchSemanticsNode().config.contains(androidx.compose.ui.semantics.SemanticsProperties.Disabled)}
         scroll("apps_selection_count");compose.onNodeWithText("已选择 10 个应用").performScrollTo().assertIsDisplayed()
         scroll("apps_inactive");compose.onNodeWithTag("apps_inactive").assertTextContains("1 个历史选择",substring=true)
-        compose.onNodeWithTag("page_back").performClick();compose.onNodeWithTag("main_back").performClick()
+        compose.onNodeWithTag("page_back").performClick();compose.onNodeWithTag("page_back").performClick();compose.onNodeWithTag("main_back").performClick()
         compose.onNodeWithTag("tab_2").performClick();compose.onNodeWithTag("settings_general").performClick();scroll("setting_perAppEnabled");compose.onNodeWithTag("setting_perAppEnabled").performClick()
         compose.onNodeWithTag("apps_mode_exclude").performClick();compose.waitUntil(10000){vm.data.value.setting("perAppMode")=="exclude"}
         compose.onNodeWithTag("page_back").performClick();compose.onNodeWithTag("page_back").performClick();compose.onNodeWithTag("main_back").performClick();compose.onNodeWithTag("tab_1").performClick()

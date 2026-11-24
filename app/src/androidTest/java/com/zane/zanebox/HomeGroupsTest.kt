@@ -54,8 +54,8 @@ class HomeGroupsTest {
         val vm=ViewModelProvider(compose.activity)[AppViewModel::class.java]
         compose.runOnIdle{vm.edit{AppData(settings=mapOf("appLanguage" to "zh-CN","smart.youtube.target" to "region:jp"))}}
         compose.waitUntil(10000){!vm.busy.value && vm.data.value.setting("smart.youtube.target")=="region:jp"}
-        compose.onNodeWithTag("tab_1").performClick();compose.onNodeWithText("自动选择范围").assertIsDisplayed()
-        compose.onNodeWithText("全部启用订阅组 · 0 个可用节点").assertIsDisplayed()
+        compose.onNodeWithTag("tab_1").performClick()
+        compose.onNodeWithText("自动选择 · 0 个节点").assertIsDisplayed()
         compose.onNodeWithTag("smart_target_youtube").performClick()
         compose.onAllNodes(hasText("代理") and hasAnyAncestor(isDialog())).assertCountEquals(1);compose.onNode(hasText("代理") and hasAnyAncestor(isDialog())).assertIsDisplayed()
         for(old in listOf("普通主节点","关闭 · 使用普通主节点","香港","美国","韩国","日本","新加坡","台湾"))compose.onNodeWithText(old).assertDoesNotExist()

@@ -23,6 +23,15 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.RectangleShape
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.toArgb
@@ -119,6 +128,93 @@ internal val LocalUiReload=staticCompositionLocalOf<(() -> Unit)?> { null }
     }
 }
 
+/** Lazy-friendly slice of a grouped card so large rule lists share one card outline without eager composition. */
+@Composable internal fun UiGroupedCardSlice(first:Boolean,last:Boolean,modifier:Modifier=Modifier,content:@Composable ColumnScope.()->Unit) {
+    if(first && last) { UiCard(modifier,content=content); return }
+    val linear=skinPalette.name!="prism"
+    val bg=MaterialTheme.colorScheme.surface
+    val borderColor=if(linear)skinDivider else MaterialTheme.colorScheme.outlineVariant.copy(alpha=.5f)
+    val borderWidth=if(linear)1.dp else .5.dp
+    val radius=when(skinPalette.name) { "miro"->24.dp; "prism"->14.dp; else->12.dp }
+    val shape=when {
+        first -> RoundedCornerShape(topStart=radius,topEnd=radius)
+        last -> RoundedCornerShape(bottomStart=radius,bottomEnd=radius)
+        else -> RectangleShape
+    }
+    Column(
+        modifier.fillMaxWidth().clip(shape).background(bg).drawWithContent {
+            drawContent()
+            val w=borderWidth.toPx()
+            val half=w/2f
+            val r=minOf(radius.toPx(),size.width/2f,size.height/2f)
+            when {
+                first -> {
+                    val path=Path().apply {
+                        moveTo(half,size.height)
+                        lineTo(half,r)
+                        arcTo(Rect(half,half,2*r-half,2*r-half),180f,90f,false)
+                        lineTo(size.width-r,half)
+                        arcTo(Rect(size.width-2*r+half,half,size.width-half,2*r-half),270f,90f,false)
+                        lineTo(size.width-half,size.height)
+                    }
+                    drawPath(path,borderColor,style=Stroke(width=w))
+                }
+                last -> {
+                    val path=Path().apply {
+                        moveTo(size.width-half,0f)
+                        lineTo(size.width-half,size.height-r)
+                        arcTo(Rect(size.width-2*r+half,size.height-2*r+half,size.width-half,size.height-half),0f,90f,false)
+                        lineTo(r,size.height-half)
+                        arcTo(Rect(half,size.height-2*r+half,2*r-half,size.height-half),90f,90f,false)
+                        lineTo(half,0f)
+                    }
+                    drawPath(path,borderColor,style=Stroke(width=w))
+                }
+                else -> {
+                    drawLine(borderColor,Offset(half,0f),Offset(half,size.height),strokeWidth=w)
+                    drawLine(borderColor,Offset(size.width-half,0f),Offset(size.width-half,size.height),strokeWidth=w)
+                }
+            }
+        },
+        content=content,
+    )
+}
+
+@Composable internal fun latencyColor(ping:Int,testing:Boolean=false,failed:Boolean=false):Color = when {
+    testing -> skinPrimaryDark
+    failed || ping==-2 -> skinError.copy(alpha=.85f)
+    ping in 1..150 -> skinSuccess
+    ping in 151..350 -> skinWarning
+    ping>350 -> skinError
+    else -> skinPalette.textTertiary
+}
+
+@Composable private fun CompactActionShell(tag:String,onClick:()->Unit,content:@Composable ()->Unit) {
+    if(skinPalette.name=="prism") {
+        FilledIconButton(onClick=onClick,modifier=Modifier.size(48.dp).testTag(tag),colors=IconButtonDefaults.filledIconButtonColors(containerColor=Color.White,contentColor=skinOnSurface)) { content() }
+    } else {
+        Box(Modifier.size(48.dp).clickable(onClick=onClick).testTag(tag),contentAlignment=Alignment.Center) {
+            Surface(Modifier.size(38.dp),shape=RoundedCornerShape(8.dp),color=skinSurfaceElevated,border=BorderStroke(1.dp,skinDivider)) {
+                Box(contentAlignment=Alignment.Center) { content() }
+            }
+        }
+    }
+}
+
+@Composable internal fun CompactActionButton(icon:ImageVector,description:String,tag:String,onClick:()->Unit,iconSize:Dp=19.dp) {
+    CompactActionShell(tag,onClick) {
+        if(skinPalette.name=="prism")Icon(icon,description)
+        else Icon(icon,description,Modifier.size(iconSize),tint=skinOnSurface)
+    }
+}
+
+@Composable internal fun CompactActionButton(painter:Painter,description:String,tag:String,onClick:()->Unit,iconSize:Dp=19.dp) {
+    CompactActionShell(tag,onClick) {
+        if(skinPalette.name=="prism")Icon(painter,description)
+        else Icon(painter,description,Modifier.size(iconSize),tint=skinOnSurface)
+    }
+}
+
 @Composable internal fun UiRow(title:String,subtitle:String="",icon:ImageVector?=null,
     modifier:Modifier=Modifier,onClick:(()->Unit)?=null,trailing:(@Composable ()->Unit)?=null,iconRes:Int=0,minHeight:Dp=62.dp,titleSize:androidx.compose.ui.unit.TextUnit=14.sp,chevron:Boolean=true,reserveIcon:Boolean=false,summaryLines:Int=1,onLongClick:(()->Unit)?=null,translateTitle:Boolean=true,translateSubtitle:Boolean=true) {
     Row(modifier.fillMaxWidth().then(if(onLongClick!=null)Modifier.combinedClickable(onClick=onClick ?: {},onLongClick=onLongClick) else if(onClick==null) Modifier else Modifier.clickable(onClick=onClick))
@@ -138,24 +234,18 @@ internal val LocalUiReload=staticCompositionLocalOf<(() -> Unit)?> { null }
     }
 }
 
-@Composable internal fun UiSection(title:String) {
-    Text(uiText(title),Modifier.padding(start=2.dp,top=10.dp,bottom=6.dp),fontSize=12.sp,lineHeight=16.sp,fontWeight=FontWeight.SemiBold,color=MaterialTheme.colorScheme.onSurface)
+@Composable internal fun UiSection(title:String,trailing:String="",translateTitle:Boolean=true,action:(@Composable ()->Unit)?=null) {
+    Row(Modifier.fillMaxWidth().padding(start=2.dp,top=10.dp,bottom=6.dp),verticalAlignment=Alignment.CenterVertically) {
+        Text(if(translateTitle)uiText(title)else title,Modifier.weight(1f),fontSize=12.sp,lineHeight=16.sp,fontWeight=FontWeight.SemiBold,color=MaterialTheme.colorScheme.onSurface)
+        if(trailing.isNotBlank())Text(trailing,fontSize=12.sp,lineHeight=16.sp,color=MaterialTheme.colorScheme.onSurfaceVariant)
+        action?.invoke()
+    }
 }
 
 @Composable internal fun UiMenu(actions:List<Pair<String,()->Unit>>,tag:String="more_menu",circle:Boolean=false) {
     var open by remember { mutableStateOf(false) }
     Box {
-        if(circle) {
-            if(skinPalette.name=="prism") {
-                FilledIconButton(onClick={open=true},modifier=Modifier.size(48.dp).testTag(tag),colors=IconButtonDefaults.filledIconButtonColors(containerColor=androidx.compose.ui.graphics.Color.White,contentColor=skinOnSurface)){Icon(Icons.Outlined.MoreVert,"更多操作")}
-            } else {
-                Box(Modifier.size(48.dp).clickable{open=true}.testTag(tag),contentAlignment=Alignment.Center) {
-                    Surface(Modifier.size(38.dp),shape=RoundedCornerShape(8.dp),color=skinSurfaceElevated,border=BorderStroke(1.dp,skinDivider)) {
-                        Box(contentAlignment=Alignment.Center) { Icon(Icons.Outlined.MoreVert,"更多操作",Modifier.size(20.dp),tint=skinOnSurface) }
-                    }
-                }
-            }
-        }
+        if(circle) CompactActionButton(Icons.Outlined.MoreVert,"更多操作",tag,{open=true},iconSize=20.dp)
         else IconButton(onClick={open=true},modifier=Modifier.testTag(tag)) {Icon(Icons.Outlined.MoreVert,"更多操作")}
         DropdownMenu(expanded=open,onDismissRequest={open=false}) {
             actions.forEach { (title,action)-> DropdownMenuItem(text={Text(uiText(title))},onClick={open=false;action()}) }
@@ -163,7 +253,7 @@ internal val LocalUiReload=staticCompositionLocalOf<(() -> Unit)?> { null }
     }
 }
 
-@Composable internal fun UiPage(title:String,onDismiss:()->Unit,action:(@Composable RowScope.()->Unit)?=null,
+@Composable internal fun UiPage(title:String,onDismiss:()->Unit,action:(@Composable RowScope.()->Unit)?=null,translateTitle:Boolean=true,
     content:@Composable (PaddingValues)->Unit) {
     val density=androidx.compose.ui.platform.LocalDensity.current
     val navigationInsets=WindowInsets.navigationBars
@@ -190,7 +280,7 @@ internal val LocalUiReload=staticCompositionLocalOf<(() -> Unit)?> { null }
         UiBackdrop(Modifier.fillMaxSize(),home=false)
         Column(Modifier.fillMaxSize().semantics{testTagsAsResourceId=true}.windowInsetsPadding(WindowInsets.safeDrawing.union(navigationInsets))) {
         Scaffold(contentColor=MaterialTheme.colorScheme.onSurface,modifier=Modifier.weight(1f),contentWindowInsets=WindowInsets(0,0,0,0),containerColor=androidx.compose.ui.graphics.Color.Transparent,
-            topBar={TopAppBar(windowInsets=WindowInsets(0,0,0,0),expandedHeight=56.dp,title={Text(uiText(title),fontFamily=MaterialTheme.typography.titleLarge.fontFamily,fontSize=20.sp,fontWeight=FontWeight.SemiBold,maxLines=1,overflow=TextOverflow.Ellipsis)},navigationIcon={
+            topBar={TopAppBar(windowInsets=WindowInsets(0,0,0,0),expandedHeight=56.dp,title={Text(if(translateTitle)uiText(title)else title,fontFamily=MaterialTheme.typography.titleLarge.fontFamily,fontSize=20.sp,fontWeight=FontWeight.SemiBold,maxLines=1,overflow=TextOverflow.Ellipsis)},navigationIcon={
                 IconButton(onClick=onDismiss,modifier=Modifier.testTag("page_back")){Icon(Icons.AutoMirrored.Outlined.ArrowBack,"返回")}
             },actions={action?.invoke(this)},colors=TopAppBarDefaults.topAppBarColors(containerColor=androidx.compose.ui.graphics.Color.Transparent))},
             content=content)
@@ -204,11 +294,11 @@ internal val LocalUiReload=staticCompositionLocalOf<(() -> Unit)?> { null }
 }
 
 @Composable internal fun UiPageList(title:String,onDismiss:()->Unit,action:(@Composable RowScope.()->Unit)?=null,
-    state:androidx.compose.foundation.lazy.LazyListState?=null,
+    state:androidx.compose.foundation.lazy.LazyListState?=null,translateTitle:Boolean=true,itemSpacing:Dp=10.dp,
     content:LazyListScope.()->Unit) {
-    UiPage(title,onDismiss,action) {padding->
+    UiPage(title,onDismiss,action,translateTitle=translateTitle) {padding->
         LazyColumn(Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding).testTag("subpage_list"),state=state ?: LocalUiListState.current ?: androidx.compose.foundation.lazy.rememberLazyListState(),
-            contentPadding=PaddingValues(start=14.dp,end=14.dp,top=12.dp,bottom=24.dp),verticalArrangement=Arrangement.spacedBy(10.dp),content=content)
+            contentPadding=PaddingValues(start=14.dp,end=14.dp,top=12.dp,bottom=24.dp),verticalArrangement=Arrangement.spacedBy(itemSpacing),content=content)
     }
 }
 

@@ -1197,6 +1197,8 @@ pub struct SmartPolicyItemSummary {
     pub lowest_node: Option<String>,
     #[serde(rename = "latencyLabel")]
     pub latency_label: Option<String>,
+    #[serde(rename = "lowestPing")]
+    pub lowest_ping: i32,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -1212,12 +1214,12 @@ fn summarize_members(
     members: &[&Node],
     testing: &HashSet<i64>,
     include_lowest: bool,
-) -> (Option<String>, Option<String>) {
+) -> (Option<String>, Option<String>, i32) {
     if members.is_empty() {
-        return (None, None);
+        return (None, None, -1);
     }
     if members.iter().any(|n| testing.contains(&n.id)) {
-        return (None, Some("测试中".to_string()));
+        return (None, Some("测试中".to_string()), -1);
     }
     let mut best: Option<&Node> = None;
     let mut any_failed = false;
@@ -1239,11 +1241,12 @@ fn summarize_members(
                 None
             },
             Some(format!("{} ms", node.ping)),
+            node.ping,
         )
     } else if any_failed {
-        (None, Some("失败".to_string()))
+        (None, Some("失败".to_string()), -2)
     } else {
-        (None, Some("未测试".to_string()))
+        (None, Some("未测试".to_string()), -1)
     }
 }
 
@@ -1300,12 +1303,12 @@ pub fn smart_panel_summary(data: &AppData, testing: &HashSet<i64>) -> SmartPanel
         }
     };
 
-    let mut target_cache: HashMap<String, (Option<String>, Option<String>)> = HashMap::new();
+    let mut target_cache: HashMap<String, (Option<String>, Option<String>, i32)> = HashMap::new();
     let mut policies = Vec::with_capacity(policy_order.len());
 
     for key in &policy_order {
         let target = smart_target(data, key);
-        let (lowest_node, latency_label) = if let Some(cached) = target_cache.get(&target) {
+        let (lowest_node, latency_label, lowest_ping) = if let Some(cached) = target_cache.get(&target) {
             cached.clone()
         } else {
             let choice = normalize_smart_target(&target);
@@ -1315,7 +1318,7 @@ pub fn smart_panel_summary(data: &AppData, testing: &HashSet<i64>) -> SmartPanel
                 if let Some(&n) = rest.parse::<i64>().ok().and_then(|id| active_by_id.get(&id)) {
                     summarize_members(&[n], testing, false)
                 } else {
-                    (None, None)
+                    (None, None, -1)
                 }
             } else if let Some(rest) = choice.strip_prefix("group:") {
                 if let Some(members) = rest
@@ -1325,7 +1328,7 @@ pub fn smart_panel_summary(data: &AppData, testing: &HashSet<i64>) -> SmartPanel
                 {
                     summarize_members(members, testing, true)
                 } else {
-                    (None, None)
+                    (None, None, -1)
                 }
             } else if let Some(rest) = choice.strip_prefix("merge:") {
                 if let Some(merge) = rest
@@ -1342,12 +1345,12 @@ pub fn smart_panel_summary(data: &AppData, testing: &HashSet<i64>) -> SmartPanel
                         .collect();
                     summarize_members(&members, testing, true)
                 } else {
-                    (None, None)
+                    (None, None, -1)
                 }
             } else if choice == "proxy" {
                 summarize_members(&proxy_members, testing, false)
             } else {
-                (None, None)
+                (None, None, -1)
             };
             target_cache.insert(target.clone(), computed.clone());
             computed
@@ -1357,6 +1360,7 @@ pub fn smart_panel_summary(data: &AppData, testing: &HashSet<i64>) -> SmartPanel
             target,
             lowest_node,
             latency_label,
+            lowest_ping,
         });
     }
 

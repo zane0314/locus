@@ -9,6 +9,7 @@ internal data class SmartPolicyRowSummary(
     val target: String,
     val lowestNode: String?,
     val latencyLabel: String?,
+    val lowestPing: Int = -1,
 )
 
 internal data class SmartPanelSummary(
@@ -86,6 +87,7 @@ internal fun smartPanelSummary(data: AppData, testing: Set<Long>): SmartPanelSum
             target = item.getString("target"),
             lowestNode = lowest,
             latencyLabel = latency,
+            lowestPing = item.optInt("lowestPing", -1),
         )
     }
     return SmartPanelSummary(

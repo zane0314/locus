@@ -406,7 +406,45 @@ proxies:
                     "latencyLabel key={}",
                     item.key
                 );
+                let expected_ping = match item.latency_label.as_deref() {
+                    Some("失败") => -2,
+                    Some("测试中") | Some("未测试") | None => -1,
+                    Some(ms) => ms
+                        .strip_suffix(" ms")
+                        .and_then(|s| s.parse::<i32>().ok())
+                        .unwrap_or(-1),
+                };
+                assert_eq!(item.lowest_ping, expected_ping, "lowestPing key={}", item.key);
             }
         }
+
+        // Explicitly verify lowest_ping semantics for failed (-2) and unmeasured (-1) groups.
+        let mut failed_data = data.clone();
+        for n in &mut failed_data.nodes {
+            n.ping = -1;
+            n.status = 1;
+        }
+        let failed_summary = smart_panel_summary(&failed_data, &HashSet::new());
+        let yt_failed = failed_summary
+            .policies
+            .iter()
+            .find(|p| p.key == "youtube")
+            .unwrap();
+        assert_eq!(yt_failed.latency_label.as_deref(), Some("失败"));
+        assert_eq!(yt_failed.lowest_ping, -2);
+
+        let mut unmeasured_data = data.clone();
+        for n in &mut unmeasured_data.nodes {
+            n.ping = -1;
+            n.status = 0;
+        }
+        let unmeasured_summary = smart_panel_summary(&unmeasured_data, &HashSet::new());
+        let yt_unmeasured = unmeasured_summary
+            .policies
+            .iter()
+            .find(|p| p.key == "youtube")
+            .unwrap();
+        assert_eq!(yt_unmeasured.latency_label.as_deref(), Some("未测试"));
+        assert_eq!(yt_unmeasured.lowest_ping, -1);
     }
 }

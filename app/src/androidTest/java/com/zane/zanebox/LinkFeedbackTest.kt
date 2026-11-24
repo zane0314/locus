@@ -49,10 +49,10 @@ class LinkFeedbackTest {
         compose.mainClock.advanceTimeBy(10000);compose.waitForIdle()
         compose.onNodeWithTag("tab_1").performClick();compose.onNodeWithTag("smart_youtube").performClick()
         compose.onNodeWithText("内置兼容规则组").assertIsDisplayed()
-        compose.onNodeWithText("规则来源").performScrollTo().performClick()
         compose.onNodeWithTag("subpage_list").performScrollToNode(hasTestTag("rule_source_raw"))
         compose.onNodeWithTag("rule_source_raw").performClick()
-        val editor=compose.onNodeWithTag("rule_source_rules").performScrollTo()
+        compose.onNodeWithTag("subpage_list").performScrollToNode(hasTestTag("rule_source_rules"))
+        val editor=compose.onNodeWithTag("rule_source_rules")
         editor.assertTextContains("DOMAIN-SUFFIX,googlevideo.com",substring=true)
         assertFalse(editor.fetchSemanticsNode().config[androidx.compose.ui.semantics.SemanticsProperties.EditableText].text.contains("USER-AGENT,"))
         compose.onNodeWithTag("rule_source_compatibility").assertDoesNotExist()
@@ -62,6 +62,7 @@ class LinkFeedbackTest {
         compose.waitForIdle()
         compose.onNodeWithTag("subpage_list").performScrollToNode(hasTestTag("rule_source_compatibility"))
         compose.onNodeWithTag("rule_source_compatibility").assertIsDisplayed().assertTextContains("USER-AGENT",substring=true)
+        compose.onNodeWithTag("subpage_list").performScrollToNode(hasTestTag("rule_source_save"))
         compose.onNodeWithTag("rule_source_save").performClick()
         compose.waitUntil(10000){!vm.busy.value && vm.data.value.setting("smartRules.youtube")==custom}
         assertEquals(custom,vm.store.snapshot().setting("smartRules.youtube"))
@@ -167,14 +168,11 @@ class LinkFeedbackTest {
     @Test fun builtinPoliciesOfferAppsDirectAndBundledRules() {
         val vm=seed();compose.onNodeWithTag("tab_1").performClick()
         compose.onNodeWithTag("smart_youtube").performClick()
-        compose.onNodeWithTag("page_list").performScrollToNode(hasTestTag("smart_apps_youtube"))
-        val appRow=compose.onNodeWithTag("smart_apps_youtube").getUnclippedBoundsInRoot()
-        val viewport=compose.onNodeWithTag("page_list").getUnclippedBoundsInRoot()
-        val delta=((appRow.top+appRow.bottom-viewport.top-viewport.bottom)/2).value*compose.activity.resources.displayMetrics.density
-        compose.onNodeWithTag("page_list").performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.ScrollBy){it(0f,delta)}
+        compose.onNodeWithTag("subpage_list").performScrollToNode(hasTestTag("smart_apps_youtube"))
         compose.onNodeWithTag("smart_apps_youtube").assertIsDisplayed().performClick()
         compose.waitUntil(5000){compose.onNodeWithTag("apps_save").isDisplayed()}
         compose.onNodeWithTag("apps_save").assertIsDisplayed();compose.onNodeWithTag("page_back").performClick()
+        compose.onNodeWithTag("page_back").performClick()
         compose.onNodeWithTag("smart_target_youtube").performClick();compose.onNodeWithText("直连").performClick()
         compose.waitUntil(10000){vm.data.value.setting("smart.youtube.target")=="direct"}
         assertTrue(vm.data.value.setting("smartRules.youtube").contains("youtube.com"))

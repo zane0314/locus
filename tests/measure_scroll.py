@@ -22,25 +22,26 @@ adb=['/opt/homebrew/bin/adb','-s',serial]
 assert subprocess.check_output(adb+['emu','avd','name'],text=True).splitlines()[0]=='ZaneBox_S25Plus_API35_Acceptance'
 def shell(*command):return subprocess.check_output(adb+['shell',*command],text=True)
 out=Path(args.out);out.mkdir(parents=True,exist_ok=True)
-shell('am','force-stop','com.zane.zanebox')
+PKG='com.zane.locus'
+shell('am','force-stop',PKG)
 if args.fixture_apk:
  subprocess.run(adb+['install','-r',str(args.fixture_apk)],check=True,stdout=subprocess.DEVNULL)
-seed=shell('am','instrument','-w','-r','-e','class','com.zane.zanebox.ScrollFixtureTest','-e','nodeCount',str(args.nodes),'-e','showBottomBar',str(not args.hide_toolbar).lower(),'com.zane.zanebox.test/androidx.test.runner.AndroidJUnitRunner')
+seed=shell('am','instrument','-w','-r','-e','class','com.zane.zanebox.ScrollFixtureTest','-e','nodeCount',str(args.nodes),'-e','showBottomBar',str(not args.hide_toolbar).lower(),f'{PKG}.test/androidx.test.runner.AndroidJUnitRunner')
 assert 'OK (1 test)' in seed,seed
 (out/(args.label+'-seed.txt')).write_text(seed)
 if args.app_apk:
  subprocess.run(adb+['install','-r',str(args.app_apk)],check=True,stdout=subprocess.DEVNULL)
-shell('am','start','-W','-n','com.zane.zanebox/.MainActivity')
+shell('am','start','-W','-n',f'{PKG}/com.zane.zanebox.MainActivity')
 time.sleep(4)
 width,height=map(int,re.findall(r'(\d+)x(\d+)',shell('wm','size'))[-1])
 def swipe(up):
  x=int(width*.45);a=int(height*.72);b=int(height*.30)
  shell('input','swipe',str(x),str(a if up else b),str(x),str(b if up else a),'500')
 for up in [True,False,True,False]:swipe(up)
-shell('dumpsys','gfxinfo','com.zane.zanebox','reset')
+shell('dumpsys','gfxinfo',PKG,'reset')
 start=time.monotonic()
 for i in range(24):swipe(i%8<4)
-raw=shell('dumpsys','gfxinfo','com.zane.zanebox','framestats')
+raw=shell('dumpsys','gfxinfo',PKG,'framestats')
 (out/(args.label+'-gfx.txt')).write_text(raw)
 frames=[];header=None
 for line in raw.splitlines():

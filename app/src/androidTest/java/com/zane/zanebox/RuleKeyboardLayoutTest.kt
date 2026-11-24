@@ -58,9 +58,10 @@ class RuleKeyboardLayoutTest {
         seed()
         compose.onNodeWithTag("tab_1").performClick()
         compose.onNodeWithTag("smart_speed").performClick()
-        compose.onNodeWithText("规则来源").performClick()
-        if(compose.onAllNodesWithTag("rule_source_raw").fetchSemanticsNodes().isNotEmpty())compose.onNodeWithTag("rule_source_raw").performClick()
-        compose.onNodeWithTag("rule_source_rules").performScrollTo().performClick()
+        compose.onNodeWithTag("subpage_list").performScrollToNode(hasTestTag("rule_source_raw"))
+        compose.onNodeWithTag("rule_source_raw").performClick()
+        compose.onNodeWithTag("subpage_list").performScrollToNode(hasTestTag("rule_source_rules"))
+        compose.onNodeWithTag("rule_source_rules").performClick()
         compose.waitUntil(10000) {
             runCatching { imeTopAndListBottom() }.getOrNull()?.let { it.imeVisible && it.imeBottom>0 }==true
         }

@@ -67,8 +67,10 @@ class SmartDragTest {
         if(compose.onAllNodesWithTag("tab_1").fetchSemanticsNodes().isNotEmpty())compose.onNodeWithTag("tab_1").performClick()
         scroll("smart_speed")
         compose.onNodeWithTag("smart_speed").performClick()
-        scroll("smart_apps_speed");compose.onNodeWithTag("smart_apps_speed").performClick()
+        compose.onNodeWithTag("subpage_list").performScrollToNode(hasTestTag("smart_apps_speed"))
+        compose.onNodeWithTag("smart_apps_speed").performClick()
         compose.onNodeWithTag("apps_save").assertIsDisplayed();compose.onNodeWithTag("page_back").performClick()
+        compose.onNodeWithTag("page_back").performClick()
         scroll("smart_target_speed");compose.onNodeWithTag("smart_target_speed").performClick();compose.onNodeWithText("取消").performClick()
     }
     @Test fun customGroupCanDragAcrossScreensUsingEdgeScroll() {

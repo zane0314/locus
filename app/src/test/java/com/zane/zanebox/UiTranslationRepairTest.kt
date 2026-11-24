@@ -11,7 +11,7 @@ class UiTranslationRepairTest {
         val labels=sections.map {it.first}+sections.flatMap {(_,preferences)->preferences.flatMap { p->
             listOf(p.title,p.availability)+if(p.key in setOf("uiSkin","appLanguage"))emptyList() else p.choices.map {it.second}
         }}+preferenceAppearance.values.flatMap {listOf(it.title,it.summary)}
-        val smartAndSettings=listOf("添加自定义应用组","智能应用路由依赖 VPN 模式。","删除自定义应用组？","添加域名规则","编辑域名规则","暂无应用流量数据","暂无活动连接","更新时强制解析服务器 IP")
+        val smartAndSettings=listOf("添加自定义应用组","智能应用路由依赖 VPN 模式。","删除自定义应用组？","添加域名规则","编辑域名规则","暂无应用流量数据","暂无活动连接","更新时强制解析服务器 IP","自动选择 · %s 个节点","规则自动更新间隔","连接后检查规则","应用分流","分流规则","自定义规则 · %s 条","批量编辑文本","删除规则源","确定")
         for(label in labels+smartAndSettings)assertFalse("English translation missing: $label",translateText(label,"en").any {it in '\u4e00'..'\u9fff'})
     }
 

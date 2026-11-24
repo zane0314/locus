@@ -100,7 +100,18 @@ class SmartPolicyLineTest {
                 assertEquals(key,expectedTarget,row.target)
                 assertEquals(key,smartLowestNode(data,expectedTarget,testing),row.lowestNode)
                 assertEquals(key,smartLatencyLabel(data,expectedTarget,testing),row.latencyLabel)
+                val expectedPing=when(val label=row.latencyLabel) {
+                    null,"测试中","未测试"-> -1
+                    "失败"-> -2
+                    else->label.removeSuffix(" ms").toInt()
+                }
+                assertEquals(key,expectedPing,row.lowestPing)
             }
         }
+        val failed=data.copy(nodes=data.nodes.map{it.copy(ping=-1,status=1)})
+        assertEquals(-2,smartPanelSummary(failed,emptySet()).policies.getValue("youtube").lowestPing)
+        val unmeasured=data.copy(nodes=data.nodes.map{it.copy(ping=-1,status=0)})
+        assertEquals(-1,smartPanelSummary(unmeasured,emptySet()).policies.getValue("youtube").lowestPing)
+        assertEquals(-1,smartPanelSummary(data,emptySet()).policies.getValue("speed").lowestPing)
     }
 }

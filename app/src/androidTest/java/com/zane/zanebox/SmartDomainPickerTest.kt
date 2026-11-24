@@ -24,23 +24,23 @@ class SmartDomainPickerTest {
         compose.waitUntil(15000){!vm.busy.value && vm.data.value.setting("smartRules.speed")==original}
         compose.onNodeWithTag("tab_1").performClick()
         compose.onNodeWithTag("smart_speed").performClick()
-        compose.onNodeWithText("规则来源").performClick()
+        compose.onNodeWithTag("subpage_list").performScrollToNode(hasTestTag("rule_source_raw"))
         compose.onNodeWithTag("rule_source_raw").assertIsDisplayed()
         compose.onNodeWithTag("rule_source_rules").assertDoesNotExist()
 
+        compose.onNodeWithTag("subpage_list").performScrollToNode(hasTestTag("rule_domain_add"))
         compose.onNodeWithTag("rule_domain_add").performClick()
         compose.onNodeWithText("域名后缀 · DOMAIN-SUFFIX").performClick()
         compose.onNodeWithTag("rule_domain_value").performTextInput("chosen.example.test")
         compose.onNodeWithTag("rule_domain_confirm").performClick()
+        compose.waitUntil(10000){!vm.busy.value && vm.store.snapshot().setting("smartRules.speed").contains("DOMAIN-SUFFIX,chosen.example.test")}
 
+        compose.onNodeWithTag("subpage_list").performScrollToNode(hasTestTag("rule_domain_1"))
         compose.onNodeWithTag("rule_domain_1").performClick()
         compose.onNodeWithText("域名关键词 · DOMAIN-KEYWORD").performClick()
         compose.onNodeWithTag("rule_domain_value").performTextReplacement("chosen-keyword")
         compose.onNodeWithTag("rule_domain_confirm").performClick()
-        runCatching { androidx.test.espresso.Espresso.onView(androidx.test.espresso.matcher.ViewMatchers.isRoot()).inRoot(androidx.test.espresso.matcher.RootMatchers.isDialog()).perform(androidx.test.espresso.action.ViewActions.closeSoftKeyboard()) }
-        compose.waitForIdle()
-        compose.onNodeWithTag("rule_source_save").performClick()
-        compose.waitUntil(10000){!vm.busy.value && vm.data.value.setting("smartRules.speed").contains("chosen.example.test")}
+        compose.waitUntil(10000){!vm.busy.value && vm.store.snapshot().setting("smartRules.speed").contains("DOMAIN-KEYWORD,chosen-keyword,proxy")}
 
         val saved=vm.store.snapshot().setting("smartRules.speed")
         assertTrue(saved.contains("# preserve comment"))

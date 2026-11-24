@@ -51,6 +51,19 @@ internal val uiLanguageSupportNotes=mapOf(
 )
 
 private val translations=mapOf(
+    "自动选择 · %s 个节点" to tr("自动选择 · %s 个节点","自動選擇 · %s 個節點","Auto-select · %s nodes"),
+    "规则自动更新间隔" to tr("规则自动更新间隔","規則自動更新間隔","Rule auto-update interval"),
+    "连接后检查规则" to tr("连接后检查规则","連線後檢查規則","Check rules after connecting"),
+    "应用分流" to tr("应用分流","應用分流","App routing"),
+    "分流规则" to tr("分流规则","分流規則","Routing rules"),
+    "自定义规则 · %s 条" to tr("自定义规则 · %s 条","自訂規則 · %s 條","Custom rules · %s"),
+    "批量编辑文本" to tr("批量编辑文本","批次編輯文字","Bulk edit text"),
+    "收起批量编辑" to tr("收起批量编辑","收合批次編輯","Collapse bulk edit"),
+    "完整" to tr("完整","完整","Exact"),
+    "后缀" to tr("后缀","後綴","Suffix"),
+    "原始" to tr("原始","原始","Raw"),
+    "删除规则源" to tr("删除规则源","刪除規則來源","Delete rule source"),
+    "确定" to tr("确定","確定","OK"),
     "代理内核" to tr("代理内核","代理核心","Proxy core"),
     "选择 sing-box、Xray 或 mihomo 转发引擎" to tr("选择 sing-box、Xray 或 mihomo 转发引擎","選擇 sing-box、Xray 或 mihomo 轉發引擎","Choose sing-box, Xray, or mihomo forwarding engine"),
     "Xray（试验）" to tr("Xray（试验）","Xray（試驗）","Xray (Experimental)"),

@@ -207,7 +207,12 @@ internal fun homeRuntimeSnapshots(source:Flow<RuntimeSnapshot>)=source.distinctU
             Scaffold(containerColor=androidx.compose.ui.graphics.Color.Transparent,contentColor=MaterialTheme.colorScheme.onSurface,
                 topBar={if(page!=0)TopAppBar(expandedHeight=56.dp,title={Text(uiText(if(page==1)"智能分流" else "设置"),fontFamily=MaterialTheme.typography.titleLarge.fontFamily,fontSize=20.sp,fontWeight=FontWeight.SemiBold)},
                     navigationIcon={IconButton(onClick={page=0},modifier=Modifier.testTag("main_back")){Icon(Icons.AutoMirrored.Outlined.ArrowBack,"返回")}},
-                    actions={if(page==1)SmartMenu(data,vm){subpage=it}},colors=TopAppBarDefaults.topAppBarColors(containerColor=androidx.compose.ui.graphics.Color.Transparent))},
+                    actions={if(page==1) {
+                        CompactActionButton(Icons.Outlined.Download,uiText("立即更新规则"),"smart_update",{vm.updateAllSmartRules()})
+                        Spacer(Modifier.width(if(linearUi)2.dp else 6.dp))
+                        SmartMenu(data,vm){subpage=it}
+                        Spacer(Modifier.width(6.dp))
+                    }},colors=TopAppBarDefaults.topAppBarColors(containerColor=androidx.compose.ui.graphics.Color.Transparent))},
                 snackbarHost={if(subpage.isBlank() && !nodeEdit && !groupEdit && !ruleEdit && !mergeEdit && editor==null && info==null && subscriptionOptions==null && speedNode==null)SnackbarHost(snackbar,Modifier.padding(bottom=if(floatingHomeBar)homeBarOverlap else 0.dp))},
                 bottomBar={Column {
                     if(!floatingHomeBar && dirty && runtime.state==2)ApplyChangesRow({vm.service.reload()},if(linearUi && data.bool("showBottomBar"))Modifier else Modifier.navigationBarsPadding())
@@ -231,28 +236,11 @@ internal fun homeRuntimeSnapshots(source:Flow<RuntimeSnapshot>)=source.distinctU
                             }
                             else Text(uiText("已选")+colon+(if(data.bool("homeAutoSelect"))uiText("自动选择") else data.nodes.firstOrNull{it.id==data.selectedNodeId}?.name ?: uiText("未选择节点")),
                                 fontSize=13.sp,color=MaterialTheme.colorScheme.onSurfaceVariant,maxLines=1,overflow=TextOverflow.Ellipsis,modifier=Modifier.weight(1f).testTag("home_selected_node"))
-                            if(!linearUi) {
-                                FilledIconButton(onClick={searching=!searching},modifier=Modifier.size(48.dp).testTag("search_toggle"),colors=IconButtonDefaults.filledIconButtonColors(containerColor=androidx.compose.ui.graphics.Color.White,contentColor=skinOnSurface)){Icon(painterResource(R.drawable.zb_ref_abc_ic_search_api_material),"搜索节点")}
-                                Spacer(Modifier.width(6.dp))
-                                Box {var add by remember{mutableStateOf(false)}
-                                    FilledIconButton(onClick={add=true},modifier=Modifier.size(48.dp).testTag("add_nodes"),colors=IconButtonDefaults.filledIconButtonColors(containerColor=androidx.compose.ui.graphics.Color.White,contentColor=skinOnSurface)){Icon(painterResource(R.drawable.zb_ref_ic_action_note_add),"添加节点")}
-                                    DropdownMenu(add,{add=false}){addActions.forEach{(title,action)->DropdownMenuItem(text={Text(uiText(title))},onClick={add=false;action()})}}
-                                }
-                            } else {
-                                Box(Modifier.size(48.dp).clickable{searching=!searching}.testTag("search_toggle"),contentAlignment=Alignment.Center) {
-                                    Surface(Modifier.size(38.dp),shape=androidx.compose.foundation.shape.RoundedCornerShape(8.dp),color=skinSurfaceElevated,border=androidx.compose.foundation.BorderStroke(1.dp,skinDivider)) {
-                                        Box(contentAlignment=Alignment.Center){Icon(painterResource(R.drawable.zb_ref_abc_ic_search_api_material),"搜索节点",Modifier.size(19.dp),tint=skinOnSurface)}
-                                    }
-                                }
-                                Spacer(Modifier.width(2.dp))
-                                Box {var add by remember{mutableStateOf(false)}
-                                    Box(Modifier.size(48.dp).clickable{add=true}.testTag("add_nodes"),contentAlignment=Alignment.Center) {
-                                        Surface(Modifier.size(38.dp),shape=androidx.compose.foundation.shape.RoundedCornerShape(8.dp),color=skinSurfaceElevated,border=androidx.compose.foundation.BorderStroke(1.dp,skinDivider)) {
-                                            Box(contentAlignment=Alignment.Center){Icon(painterResource(R.drawable.zb_ref_ic_action_note_add),"添加节点",Modifier.size(19.dp),tint=skinOnSurface)}
-                                        }
-                                    }
-                                    DropdownMenu(add,{add=false}){addActions.forEach{(title,action)->DropdownMenuItem(text={Text(uiText(title))},onClick={add=false;action()})}}
-                                }
+                            CompactActionButton(painterResource(R.drawable.zb_ref_abc_ic_search_api_material),"搜索节点","search_toggle",{searching=!searching})
+                            Spacer(Modifier.width(if(linearUi)2.dp else 6.dp))
+                            Box {var add by remember{mutableStateOf(false)}
+                                CompactActionButton(painterResource(R.drawable.zb_ref_ic_action_note_add),"添加节点","add_nodes",{add=true})
+                                DropdownMenu(add,{add=false}){addActions.forEach{(title,action)->DropdownMenuItem(text={Text(uiText(title))},onClick={add=false;action()})}}
                             }
                             Spacer(Modifier.width(if(linearUi)2.dp else 6.dp));UiMenu(moreActions,"node_menu",circle=true)
                         }
@@ -334,14 +322,7 @@ internal fun homeRuntimeSnapshots(source:Flow<RuntimeSnapshot>)=source.distinctU
                                         Text(n.name,fontSize=14.sp,fontWeight=if(isNodeSelected)FontWeight.SemiBold else FontWeight.Medium,maxLines=2,overflow=TextOverflow.Ellipsis)
                                         Text(subtitle,fontSize=if(linearUi)12.sp else 11.sp,fontFamily=if(skinPalette.monoNumbers)androidx.compose.ui.text.font.FontFamily.Monospace else androidx.compose.ui.text.font.FontFamily.Default,color=MaterialTheme.colorScheme.onSurfaceVariant)
                                     }
-                                    val latencyColor=when {
-                                        n.id in testing -> skinPrimaryDark
-                                        n.status==1 || n.ping==-2 -> skinError.copy(alpha=.85f)
-                                        n.ping in 1..150 -> skinSuccess
-                                        n.ping in 151..350 -> skinWarning
-                                        n.ping>350 -> skinError
-                                        else -> skinPalette.textTertiary
-                                    }
+                                    val latencyColor=latencyColor(n.ping,testing=n.id in testing,failed=n.status==1)
                                     Text(uiText(if(n.id in testing)"测试中" else nodeTestLabel(n)),fontFamily=if(n.ping>0 || skinPalette.monoNumbers)androidx.compose.ui.text.font.FontFamily.Monospace else androidx.compose.ui.text.font.FontFamily.Default,fontSize=12.sp,color=latencyColor,modifier=Modifier.testTag("node_latency_${n.id}").clickable(enabled=enabled){vm.service.testNodes(listOf(n.id))}.padding(horizontal=4.dp))
                                     IconButton(onClick={info=n},modifier=Modifier.testTag("node_info_${n.id}")){Icon(painterResource(R.drawable.zb_ref_ic_baseline_info_24),"节点详情",Modifier.size(20.dp),tint=skinSecondaryText)}
                                     UiMenu(listOf("链式代理" to {chainNode=n;editorSaveError=""},"编辑" to {nodeForm(n)},"测试延迟" to {vm.service.testNodes(listOf(n.id))},"速度测试" to {speedNode=n.id},"分享" to {share(shareText(listOf(n)))},"二维码" to {qr=shareText(listOf(n))},"复制" to {copy(shareText(listOf(n)))},"节点区域" to {form("节点区域",listOf("hk/us/kr/jp/sg/tw（留空自动）" to data.setting("nodeRegion.${n.id}"))){val key="nodeRegion.${n.id}";val region=it[0].trim().lowercase(java.util.Locale.ROOT);validatePreference(key,region);vm.setting(key,region)}},"多选" to {selectingNodes=true;selectedNodes=selectedNodes+n.id},"删除" to {deleteNodes(setOf(n.id))}).filter{enabled || it.first !in listOf("测试延迟","速度测试")},"node_menu_${n.id}")

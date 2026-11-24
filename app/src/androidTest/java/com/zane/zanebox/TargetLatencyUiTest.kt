@@ -6,6 +6,7 @@ import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.lifecycle.ViewModelProvider
 import com.zane.zanebox.ui.AppViewModel
+import androidx.compose.ui.unit.dp
 import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
@@ -77,7 +78,8 @@ class TargetLatencyUiTest {
         compose.onNodeWithTag("smart_target_youtube").performClick()
         compose.onNodeWithText("分流目标").assertIsDisplayed()
         compose.onNodeWithText("取消").performClick()
-        scrollTo("smart_merges").performClick()
+        compose.onNodeWithTag("smart_menu").performClick()
+        compose.onNodeWithText("节点汇总组").performClick()
         compose.onNodeWithTag("merge_latency_6105").assertTextContains("ms",substring=true)
         val second=vm.service.testProgress.value.batchId
         compose.onNodeWithTag("merge_latency_6105").performClick()
@@ -130,18 +132,18 @@ class TargetLatencyUiTest {
         compose.runOnIdle{vm.edit{policyData(mapOf("smart.x.target" to "node:6102","smart.speed.target" to "direct"))}}
         saved();compose.onNodeWithTag("tab_1").performClick()
         scrollTo("smart_card_youtube")
-        // Four bare values: app name / 5 ms on the upper line, lowest node / group name on the lower line.
+        // Four bare values: app name / 5 ms on the upper line, target -> lowest node on the lower line.
         compose.onNodeWithTag("smart_latency_youtube").assertTextEquals("5 ms")
         // Same node as the 5 ms above (B), shown bare: neither the stored choice A nor the selected node A, and no prefix.
         compose.onNodeWithTag("smart_node_youtube",useUnmergedTree=true).assertTextEquals("出口 B")
-        compose.onNodeWithTag("smart_target_youtube").assertTextEquals("延迟验收订阅")
+        compose.onNodeWithTag("smart_target_youtube").assertTextContains("延迟验收订阅",substring=true)
         val card=compose.onNodeWithTag("smart_card_youtube")
         for(prefix in listOf("组内最低","目标：","上次","已选","当前"))
             assertEquals("card must not contain the prefix '$prefix'",0,compose.onAllNodes(hasText(prefix,substring=true) and hasAnyAncestor(hasTestTag("smart_card_youtube")),useUnmergedTree=true).fetchSemanticsNodes().size)
         assertEquals("group name shown once",1,compose.onAllNodes(hasText("延迟验收订阅",substring=true) and hasAnyAncestor(hasTestTag("smart_card_youtube"))).fetchSemanticsNodes().size)
         val latency=bounds("smart_latency_youtube");val node=bounds("smart_node_youtube");val target=bounds("smart_target_youtube");val outer=card.fetchSemanticsNode().boundsInRoot
         assertTrue("latency on the upper line, right side",latency.bottom<=target.top+1 && latency.left>outer.left+outer.width/3)
-        assertTrue("node left, target right on the lower line",node.right<=target.left+1 && node.left<target.left)
+        assertTrue("node inside lower target line",node.left>=target.left-1 && node.right<=target.right+1 && node.top>=target.top-1 && node.bottom<=target.bottom+1)
         assertTrue("target right-aligned with latency",kotlin.math.abs(latency.right-target.right)<=24)
 
         // Single node, direct and off targets never repeat a node or invent a group minimum.
@@ -150,7 +152,9 @@ class TargetLatencyUiTest {
         compose.onNodeWithTag("smart_latency_x").assertTextEquals("5 ms")
         compose.onAllNodes(hasText("组内最低",substring=true) and hasAnyAncestor(hasTestTag("smart_card_x")),useUnmergedTree=true).assertCountEquals(0)
         compose.onNodeWithTag("smart_target_x").assertTextEquals("出口 B")
-        scrollTo("smart_target_speed")
+        scrollTo("smart_card_speed")
+        val speedCardBounds=compose.onNodeWithTag("smart_card_speed").getBoundsInRoot()
+        assertTrue("1.0x smart_card_speed height must be <= 64dp, actual=${speedCardBounds.bottom-speedCardBounds.top}",speedCardBounds.bottom-speedCardBounds.top<=64.dp)
         compose.onNodeWithTag("smart_node_speed",useUnmergedTree=true).assertDoesNotExist()
         compose.onNodeWithTag("smart_latency_speed").assertDoesNotExist()
         compose.onNodeWithTag("smart_target_speed").assertTextEquals("直连")
@@ -169,19 +173,28 @@ class TargetLatencyUiTest {
         compose.onNodeWithTag("smart_apps_youtube").assertDoesNotExist()
         measured(batch,setOf(6101L,6102L))
         compose.onNodeWithTag("smart_youtube").performTouchInput { click(androidx.compose.ui.geometry.Offset(8f,center.y)) }
-        scrollTo("smart_apps_youtube")
+        compose.onNodeWithTag("subpage_list").performScrollToNode(hasTestTag("smart_apps_youtube"))
         compose.onNodeWithTag("smart_apps_youtube").assertIsDisplayed()
-        scrollTo("smart_current_youtube").assertIsDisplayed()
+        compose.onNodeWithTag("subpage_list").performScrollToNode(hasTestTag("smart_current_youtube"))
+        compose.onNodeWithTag("smart_current_youtube").assertIsDisplayed()
+        compose.onNodeWithTag("smart_goal_youtube").assertIsDisplayed()
     }
 
     @Test fun allSkinsAtLargeFontKeepLongNamesEllipsizedAndMaxLatencyComplete() {
         val longNode="香港专线超长节点名称用于验证省略显示不会遮挡数值或按钮 0123456789 0123456789 0123456789"
         val longGroup="亚洲优选超长分组名称用于验证目标按钮省略 0123456789 0123456789"
-        compose.runOnIdle {vm.edit {policyData(mapOf("groupSelection.group-6101" to "node-6101"),nodes={ list->list.map{n->if(n.id==6101L)n.copy(name=longNode,ping=65535,status=3) else if(n.id==6102L)n.copy(ping=65535,status=3) else n}}).let{d->d.copy(groups=d.groups.map{g->if(g.id==6101L)g.copy(name=longGroup) else g})}}}
+        compose.runOnIdle {vm.edit {policyData(mapOf("groupSelection.group-6101" to "node-6101","smart.speed.target" to "group:6101"),nodes={ list->list.map{n->if(n.id==6101L)n.copy(name=longNode,ping=65535,status=3) else if(n.id==6102L)n.copy(ping=65535,status=3) else n}}).let{d->d.copy(groups=d.groups.map{g->if(g.id==6101L)g.copy(name=longGroup) else g})}}}
         saved();compose.onNodeWithTag("tab_1").performClick()
         for(skin in listOf("prism","linear","claude","supabase","miro")) {
             compose.runOnIdle{vm.setting("uiSkin",skin)}
             compose.waitUntil(15000){!vm.busy.value && vm.data.value.setting("uiSkin")==skin}
+            scrollTo("smart_card_speed")
+            compose.onNodeWithTag("smart_latency_speed").assertIsDisplayed()
+            val speedValue=compose.onNode(hasText("65535 ms") and hasAnyAncestor(hasTestTag("smart_latency_speed")),useUnmergedTree=true)
+            speedValue.assertIsDisplayed()
+            val speedLayout=layout(speedValue)
+            assertFalse("$skin: speed latency clipped; ${detail("speed",speedLayout)}",speedLayout.didOverflowWidth || speedLayout.didOverflowHeight)
+            assertEquals("$skin: speed latency never splits; ${detail("speed",speedLayout)}",1,speedLayout.lineCount)
             scrollTo("smart_card_youtube")
             compose.onNodeWithTag("smart_latency_youtube").assertIsDisplayed()
             val value=compose.onNode(hasText("65535 ms") and hasAnyAncestor(hasTestTag("smart_latency_youtube")),useUnmergedTree=true)
@@ -197,11 +210,11 @@ class TargetLatencyUiTest {
             assertEquals("$skin: long node name ellipsized on one line; ${detail("node",nodeLayout)}; $geometry",1,nodeLayout.lineCount)
             assertTrue("$skin: latency inside card; $geometry",latency.right<=outer.right+1 && latency.left>=outer.left)
             assertTrue("$skin: target inside card; $geometry",target.right<=outer.right+1)
-            assertTrue("$skin: lower line does not overlap; $geometry",node.right<=target.left+1 && latency.bottom<=target.top+1)
+            assertTrue("$skin: lower line does not overlap; $geometry",node.left>=target.left-1 && node.right<=target.right+1 && latency.bottom<=target.top+1)
         }
-        // Expanded details show the full values: not ellipsized, clipped or truncated at 2.0 font scale.
+        // Detail page header shows full wrapped values: not ellipsized, clipped or truncated at 2.0 font scale.
         compose.onNodeWithTag("smart_youtube").performTouchInput { click(androidx.compose.ui.geometry.Offset(8f,center.y)) }
-        scrollTo("smart_current_youtube")
+        compose.onNodeWithTag("subpage_list").performScrollToNode(hasTestTag("smart_current_youtube"))
         for((tag,full) in listOf("smart_current_youtube" to longNode,"smart_goal_youtube" to longGroup)) {
             val text=compose.onNode(hasText(full,substring=true) and hasAnyAncestor(hasTestTag(tag)),useUnmergedTree=true)
             text.assertIsDisplayed()
@@ -209,6 +222,5 @@ class TargetLatencyUiTest {
             assertFalse(detail(tag,l),l.didOverflowWidth || l.didOverflowHeight || l.hasVisualOverflow)
             assertTrue(detail(tag,l),l.layoutInput.text.text.contains(full))
         }
-        compose.onAllNodes(hasText(longGroup,substring=true) and hasAnyAncestor(hasTestTag("smart_card_youtube"))).assertCountEquals(2)
     }
 }
