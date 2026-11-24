@@ -62,7 +62,7 @@ func (c *CacheFile) FakeIPSaveMetadataAsync(metadata *adapter.FakeIPMetadata) {
 		c.saveMetadataTimer = time.AfterFunc(C.FakeIPMetadataSaveInterval, func() {
 			c.saveMetadataAccess.Lock()
 			savedMetadata := c.saveMetadata
-			defer c.saveMetadataAccess.Unlock()
+			c.saveMetadataAccess.Unlock()
 			if savedMetadata != nil {
 				_ = c.FakeIPSaveMetadata(savedMetadata)
 			}
@@ -212,11 +212,13 @@ func (c *CacheFile) FakeIPReset() error {
 	}
 	c.saveMetadata = nil
 	return c.batch(func(tx *bbolt.Tx) error {
-		for _, name := range [][]byte{bucketFakeIP, bucketFakeIPDomain4, bucketFakeIPDomain6} {
-			if tx.Bucket(name) != nil {
-				if err := tx.DeleteBucket(name); err != nil {
-					return err
-				}
+		for _, bucketName := range [][]byte{bucketFakeIP, bucketFakeIPDomain4, bucketFakeIPDomain6} {
+			if tx.Bucket(bucketName) == nil {
+				continue
+			}
+			err := tx.DeleteBucket(bucketName)
+			if err != nil {
+				return err
 			}
 		}
 		return nil

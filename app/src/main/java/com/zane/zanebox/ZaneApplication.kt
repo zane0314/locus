@@ -10,6 +10,9 @@ class ZaneApplication : Application() {
         com.zane.zanebox.subscription.SubscriptionScheduler.connectionCheck={ context -> com.zane.zanebox.runtime.ServiceClient.isConnected(context) }
         com.zane.zanebox.subscription.SubscriptionScheduler.onUpdated={ context,id,applied -> com.zane.zanebox.runtime.ServiceClient.updateSubscription(context,id,applied) }
         if(mainProcess) {
+            (getSystemService(NOTIFICATION_SERVICE) as? android.app.NotificationManager)?.let {
+                com.zane.zanebox.runtime.ZaneRuntime.ensureNotificationChannel(it)
+            }
             com.zane.zanebox.subscription.SubscriptionScheduler.initialize(this)
         }
     }

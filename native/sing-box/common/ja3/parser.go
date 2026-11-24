@@ -167,7 +167,7 @@ func (j *ClientHello) parseExtensions(exs []byte) error {
 	exs = exs[extensionsHeaderLen:]
 
 	// Check if we can decode the next fields
-	if len(exs) != int(exsLen) {
+	if len(exs) < int(exsLen) {
 		return &ParseError{LengthErr, 10}
 	}
 
@@ -230,7 +230,7 @@ func (j *ClientHello) parseExtensions(exs []byte) error {
 			sex = sex[ecExtensionHeaderLen:]
 
 			// Check if we can decode the next fields
-			if len(sex) != int(ecsLen) || ecsLen%2 != 0 {
+			if len(sex) != int(ecsLen) {
 				return &ParseError{LengthErr, 16}
 			}
 
@@ -264,22 +264,24 @@ func (j *ClientHello) parseExtensions(exs []byte) error {
 				return &ParseError{LengthErr, 19}
 			}
 			versionsLen := int(sex[0])
-			if versionsLen == 0 || versionsLen%2 != 0 || versionsLen != len(sex)-1 {
-				return &ParseError{LengthErr, 19}
+			sex = sex[versionExtensionHeaderLen:]
+			if len(sex) < versionsLen {
+				return &ParseError{LengthErr, 21}
 			}
-			for i := 0; i < versionsLen; i += 2 {
-				versions = append(versions, binary.BigEndian.Uint16(sex[1:][i:]))
+			for i := range versionsLen / 2 {
+				versions = append(versions, binary.BigEndian.Uint16(sex[i*2:]))
 			}
 		case signatureAlgorithmsExtensionType:
 			if len(sex) < signatureAlgorithmsExtensionHeaderLen {
 				return &ParseError{LengthErr, 20}
 			}
-			ssaLen := binary.BigEndian.Uint16(sex)
-			if ssaLen == 0 || ssaLen%2 != 0 || int(ssaLen) != len(sex)-2 {
-				return &ParseError{LengthErr, 20}
+			ssaLen := int(binary.BigEndian.Uint16(sex))
+			sex = sex[signatureAlgorithmsExtensionHeaderLen:]
+			if len(sex) < ssaLen {
+				return &ParseError{LengthErr, 22}
 			}
-			for i := 0; i < int(ssaLen); i += 2 {
-				signatureAlgorithms = append(signatureAlgorithms, binary.BigEndian.Uint16(sex[2:][i:]))
+			for i := range ssaLen / 2 {
+				signatureAlgorithms = append(signatureAlgorithms, binary.BigEndian.Uint16(sex[i*2:]))
 			}
 		}
 		exs = exs[4+exLen:]

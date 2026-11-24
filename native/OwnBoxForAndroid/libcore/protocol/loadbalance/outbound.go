@@ -173,7 +173,7 @@ func (s *LoadBalance) ListenPacket(ctx context.Context, destination M.Socksaddr)
 }
 
 func (s *LoadBalance) NewConnection(ctx context.Context, conn net.Conn, metadata adapter.InboundContext, onClose N.CloseHandlerFunc) {
-	ctx = interrupt.ContextWithIsExternalConnection(ctx)
+	ctx = interrupt.ContextWithIsExternalConnection(ctx, true)
 	selected := s.pickByDestination(metadata.Destination)
 	if selected == nil {
 		conn.Close()
@@ -187,7 +187,7 @@ func (s *LoadBalance) NewConnection(ctx context.Context, conn net.Conn, metadata
 }
 
 func (s *LoadBalance) NewPacketConnection(ctx context.Context, conn N.PacketConn, metadata adapter.InboundContext, onClose N.CloseHandlerFunc) {
-	ctx = interrupt.ContextWithIsExternalConnection(ctx)
+	ctx = interrupt.ContextWithIsExternalConnection(ctx, true)
 	selected := s.pickByDestination(metadata.Destination)
 	if selected == nil {
 		conn.Close()

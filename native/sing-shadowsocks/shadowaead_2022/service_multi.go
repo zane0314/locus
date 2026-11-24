@@ -32,10 +32,10 @@ var _ shadowsocks.MultiService[int] = (*MultiService[int])(nil)
 type MultiService[U comparable] struct {
 	*Service
 
-	usersAccess sync.RWMutex
-	uPSK        map[U][]byte
-	uPSKHash    map[[aes.BlockSize]byte]U
-	uCipher     map[U]cipher.Block
+	access   sync.RWMutex
+	uPSK     map[U][]byte
+	uPSKHash map[[aes.BlockSize]byte]U
+	uCipher  map[U]cipher.Block
 }
 
 func NewMultiServiceWithPassword[U comparable](method string, password string, udpTimeout int64, handler shadowsocks.Handler, timeFunc func() time.Time) (*MultiService[U], error) {
@@ -72,9 +72,6 @@ func NewMultiService[U comparable](method string, iPSK []byte, udpTimeout int64,
 }
 
 func (s *MultiService[U]) UpdateUsers(userList []U, keyList [][]byte) error {
-	if len(userList) != len(keyList) {
-		return E.New("user/key length mismatch")
-	}
 	uPSK := make(map[U][]byte)
 	uPSKHash := make(map[[aes.BlockSize]byte]U)
 	uCipher := make(map[U]cipher.Block)
@@ -91,7 +88,7 @@ func (s *MultiService[U]) UpdateUsers(userList []U, keyList [][]byte) error {
 		copy(hash[:], hash512[:])
 
 		uPSKHash[hash] = user
-		uPSK[user] = append([]byte(nil), key...)
+		uPSK[user] = key
 		var err error
 		uCipher[user], err = s.blockConstructor(key)
 		if err != nil {
@@ -99,18 +96,15 @@ func (s *MultiService[U]) UpdateUsers(userList []U, keyList [][]byte) error {
 		}
 	}
 
-	s.usersAccess.Lock()
+	s.access.Lock()
 	s.uPSK = uPSK
 	s.uPSKHash = uPSKHash
 	s.uCipher = uCipher
-	s.usersAccess.Unlock()
+	s.access.Unlock()
 	return nil
 }
 
 func (s *MultiService[U]) UpdateUsersWithPasswords(userList []U, passwordList []string) error {
-	if len(userList) != len(passwordList) {
-		return E.New("user/password length mismatch")
-	}
 	keyList := make([][]byte, 0, len(passwordList))
 	for _, password := range passwordList {
 		if password == "" {
@@ -171,11 +165,11 @@ func (s *MultiService[U]) NewConnection0(ctx context.Context, conn net.Conn, met
 	}
 	b.Decrypt(eiHeader, eiHeader)
 
-	s.usersAccess.RLock()
-	user, loadedUser := s.uPSKHash[_eiHeader]
+	s.access.RLock()
+	user, loaded := s.uPSKHash[_eiHeader]
 	uPSK := s.uPSK[user]
-	s.usersAccess.RUnlock()
-	if !loadedUser {
+	s.access.RUnlock()
+	if !loaded {
 		return ErrInvalidRequest
 	}
 
@@ -288,13 +282,12 @@ func (s *MultiService[U]) newPacket(ctx context.Context, conn N.PacketConn, buff
 	s.udpBlockCipher.Decrypt(eiHeader, buffer.Range(aes.BlockSize, 2*aes.BlockSize))
 	xorWords(eiHeader, eiHeader, packetHeader)
 
-	// The asynchronous UDP writer must keep the same authenticated generation.
-	s.usersAccess.RLock()
-	user, loadedUser := s.uPSKHash[_eiHeader]
+	s.access.RLock()
+	user, loaded := s.uPSKHash[_eiHeader]
 	uPSK := s.uPSK[user]
-	userCipher := s.uCipher[user]
-	s.usersAccess.RUnlock()
-	if !loadedUser {
+	uCipher := s.uCipher[user]
+	s.access.RUnlock()
+	if !loaded {
 		return E.New("invalid request")
 	}
 
@@ -375,6 +368,10 @@ process:
 		err = E.Cause(err, "read padding length")
 		goto returnErr
 	}
+	if int(paddingLen) > buffer.Len() {
+		err = ErrPacketTooShort
+		goto returnErr
+	}
 	buffer.Advance(int(paddingLen))
 
 	destination, err := M.SocksaddrSerializer.ReadAddrPort(buffer)
@@ -385,7 +382,7 @@ process:
 	metadata.Protocol = "shadowsocks"
 	metadata.Destination = destination
 	s.udpNat.NewContextPacket(ctx, sessionId, buffer, metadata, func(natConn N.PacketConn) (context.Context, N.PacketWriter) {
-		return auth.ContextWithUser(ctx, user), &serverPacketWriter{s.Service, conn, natConn, session, userCipher}
+		return auth.ContextWithUser(ctx, user), &serverPacketWriter{s.Service, conn, natConn, session, uCipher}
 	})
 	return nil
 }

@@ -1,7 +1,6 @@
 package listener
 
 import (
-	"context"
 	"net"
 	"net/netip"
 	"strings"
@@ -83,72 +82,34 @@ func (l *Listener) ListenTCP() (net.Listener, error) {
 	return tcpListener, err
 }
 
-const (
-	tcpAcceptTemporaryDelayMin = 5 * time.Millisecond
-	tcpAcceptTemporaryDelayMax = time.Second
-)
-
-// acceptTCP keeps temporary Accept failures from turning into a busy loop.
-// The caller's context also lets normal listener shutdown interrupt the delay.
-func acceptTCP(ctx context.Context, tcpListener net.Listener, onTemporaryError func(error)) (net.Conn, error) {
-	var tempDelay time.Duration
-	for {
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		default:
-		}
-
-		conn, err := tcpListener.Accept()
-		if err == nil {
-			return conn, nil
-		}
-		//nolint:staticcheck
-		netError, isNetError := err.(net.Error)
-		if !isNetError || !netError.Temporary() {
-			return nil, err
-		}
-		if onTemporaryError != nil {
-			onTemporaryError(err)
-		}
-		if tempDelay == 0 {
-			tempDelay = tcpAcceptTemporaryDelayMin
-		} else if tempDelay >= tcpAcceptTemporaryDelayMax/2 {
-			tempDelay = tcpAcceptTemporaryDelayMax
-		} else {
-			tempDelay *= 2
-		}
-		timer := time.NewTimer(tempDelay)
-		select {
-		case <-timer.C:
-		case <-ctx.Done():
-			if !timer.Stop() {
-				select {
-				case <-timer.C:
-				default:
-				}
-			}
-			return nil, ctx.Err()
-		}
-	}
-}
-
 func (l *Listener) loopTCPIn() {
 	tcpListener := l.tcpListener
-	var metadata adapter.InboundContext
+	var (
+		metadata    adapter.InboundContext
+		acceptDelay time.Duration
+	)
 	for {
-		conn, err := acceptTCP(l.ctx, tcpListener, func(err error) {
-			//nolint:staticcheck
-			l.logger.Error(err)
-		})
+		conn, err := tcpListener.Accept()
 		if err != nil {
-			if l.shutdown.Load() || l.ctx.Err() != nil || E.IsClosed(err) {
+			if l.shutdown.Load() && E.IsClosed(err) {
 				return
 			}
-			_ = tcpListener.Close()
+			//nolint:staticcheck
+			if netError, isNetError := err.(net.Error); isNetError && netError.Temporary() {
+				if acceptDelay == 0 {
+					acceptDelay = 5 * time.Millisecond
+				} else {
+					acceptDelay = min(2*acceptDelay, time.Second)
+				}
+				l.logger.Error(err, ", retrying in ", acceptDelay)
+				time.Sleep(acceptDelay)
+				continue
+			}
+			l.tcpListener.Close()
 			l.logger.Error("tcp listener closed: ", err)
 			return
 		}
+		acceptDelay = 0
 		//nolint:staticcheck
 		metadata.InboundDetour = l.listenOptions.Detour
 		metadata.Source = M.SocksaddrFromNet(conn.RemoteAddr()).Unwrap()

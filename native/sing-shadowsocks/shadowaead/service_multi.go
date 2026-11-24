@@ -21,11 +21,11 @@ import (
 var _ shadowsocks.MultiService[int] = (*MultiService[int])(nil)
 
 type MultiService[U comparable] struct {
-	usersAccess sync.RWMutex
-	name        string
-	methodMap   map[U]*Method
-	handler     shadowsocks.Handler
-	udpNat      *udpnat.Service[netip.AddrPort]
+	name      string
+	access    sync.RWMutex
+	methodMap map[U]*Method
+	handler   shadowsocks.Handler
+	udpNat    *udpnat.Service[netip.AddrPort]
 }
 
 func NewMultiService[U comparable](method string, udpTimeout int64, handler shadowsocks.Handler) (*MultiService[U], error) {
@@ -42,28 +42,22 @@ func (s *MultiService[U]) Name() string {
 }
 
 func (s *MultiService[U]) UpdateUsers(userList []U, keyList [][]byte) error {
-	if len(userList) != len(keyList) {
-		return E.New("user/key length mismatch")
-	}
 	methodMap := make(map[U]*Method)
 	for i, user := range userList {
 		key := keyList[i]
-		method, err := New(s.name, append([]byte(nil), key...), "")
+		method, err := New(s.name, key, "")
 		if err != nil {
 			return err
 		}
 		methodMap[user] = method
 	}
-	s.usersAccess.Lock()
+	s.access.Lock()
 	s.methodMap = methodMap
-	s.usersAccess.Unlock()
+	s.access.Unlock()
 	return nil
 }
 
 func (s *MultiService[U]) UpdateUsersWithPasswords(userList []U, passwordList []string) error {
-	if len(userList) != len(passwordList) {
-		return E.New("user/password length mismatch")
-	}
 	methodMap := make(map[U]*Method)
 	for i, user := range userList {
 		password := passwordList[i]
@@ -73,9 +67,9 @@ func (s *MultiService[U]) UpdateUsersWithPasswords(userList []U, passwordList []
 		}
 		methodMap[user] = method
 	}
-	s.usersAccess.Lock()
+	s.access.Lock()
 	s.methodMap = methodMap
-	s.usersAccess.Unlock()
+	s.access.Unlock()
 	return nil
 }
 
@@ -88,10 +82,9 @@ func (s *MultiService[U]) NewConnection(ctx context.Context, conn net.Conn, meta
 }
 
 func (s *MultiService[U]) newConnection(ctx context.Context, conn net.Conn, metadata M.Metadata) error {
-	// Keep one immutable generation across header reads and the handler callback.
-	s.usersAccess.RLock()
+	s.access.RLock()
 	methodMap := s.methodMap
-	s.usersAccess.RUnlock()
+	s.access.RUnlock()
 	var user U
 	var method *Method
 	for u, m := range methodMap {
@@ -162,10 +155,9 @@ func (s *MultiService[U]) NewPacket(ctx context.Context, conn N.PacketConn, buff
 }
 
 func (s *MultiService[U]) newPacket(ctx context.Context, conn N.PacketConn, buffer *buf.Buffer, metadata M.Metadata) error {
-	// Keep one immutable generation across header reads and the handler callback.
-	s.usersAccess.RLock()
+	s.access.RLock()
 	methodMap := s.methodMap
-	s.usersAccess.RUnlock()
+	s.access.RUnlock()
 	var user U
 	var method *Method
 	for u, m := range methodMap {

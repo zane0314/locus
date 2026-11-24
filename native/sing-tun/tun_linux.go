@@ -34,7 +34,6 @@ type NativeTun struct {
 	iovecsOutputDefault []unix.Iovec
 	interfaceCallback   *list.Element[DefaultInterfaceUpdateCallback]
 	options             Options
-	ruleIndex6          []int
 	readAccess          sync.Mutex
 	writeAccess         sync.Mutex
 	vnetHdr             bool
@@ -333,7 +332,10 @@ func (t *NativeTun) start() error {
 
 	if t.options.IPRoute2TableIndex == 0 {
 		for {
-			t.options.IPRoute2TableIndex = int(rand.Uint32())
+			t.options.IPRoute2TableIndex = int(rand.Uint32() & 0x7fffffff)
+			if t.options.IPRoute2TableIndex <= 255 {
+				continue
+			}
 			routeList, fErr := netlink.RouteListFiltered(netlink.FAMILY_ALL, &netlink.Route{Table: t.options.IPRoute2TableIndex}, netlink.RT_FILTER_TABLE)
 			if len(routeList) == 0 || fErr != nil {
 				break
@@ -357,7 +359,7 @@ func (t *NativeTun) start() error {
 		return E.Cause(err, "set rules")
 	}
 
-	if t.options.DNSMode != DNSModeDisabled && t.options.NetNs == "" {
+	if t.options.DNSModeOrDefault() != DNSModeDisabled && t.options.NetNs == "" {
 		err = t.setSearchDomainForSystemdResolved()
 		if err != nil {
 			return E.Cause(err, "set search domain")
@@ -377,7 +379,7 @@ func (t *NativeTun) Close() error {
 	if t.options.EXP_ExternalConfiguration {
 		return common.Close(common.PtrOrNil(t.tunFile))
 	}
-	if t.options.DNSMode != DNSModeDisabled && t.options.NetNs == "" {
+	if t.options.DNSModeOrDefault() != DNSModeDisabled && t.options.NetNs == "" {
 		t.unsetSearchDomainForSystemdResolved()
 	}
 	return E.Errors(runInNetworkNamespace(t.options.NetNs, func() error {
@@ -649,6 +651,9 @@ func (t *NativeTun) routes(tunLink netlink.Link) ([]netlink.Route, error) {
 	if err != nil {
 		return nil, E.Cause(err, "build auto route ranges")
 	}
+	if !t.options.AutoRoute && len(t.options.Inet6Address) > 0 && len(t.options.Inet6RouteAddress) == 0 {
+		routeRanges = append(routeRanges, netip.PrefixFrom(netip.IPv6Unspecified(), 0))
+	}
 	// Do not create gateway on linux by default
 	gateway4, gateway6 := t.options.Inet4GatewayAddr(), t.options.Inet6GatewayAddr()
 	return common.Map(routeRanges, func(it netip.Prefix) netlink.Route {
@@ -674,13 +679,11 @@ func (t *NativeTun) nextIndex6() int {
 	}
 	var minIndex int
 	for _, rule := range ruleList {
-		if rule.Priority > 0 && (minIndex == 0 || rule.Priority < minIndex) {
+		if rule.Priority > redirectRouteRulePriority && (minIndex == 0 || rule.Priority < minIndex) {
 			minIndex = rule.Priority
 		}
 	}
-	minIndex--
-	t.ruleIndex6 = append(t.ruleIndex6, minIndex)
-	return minIndex
+	return max(minIndex-1, redirectRouteRulePriority+1)
 }
 
 func (t *NativeTun) rules() []*netlink.Rule {
@@ -773,6 +776,9 @@ func (t *NativeTun) rules() []*netlink.Rule {
 		if p4 {
 			it = netlink.NewRule()
 			it.Priority = t.options.IPRoute2AutoRedirectFallbackRuleIndex
+			it.Mark = t.options.AutoRedirectOutputMark
+			it.MarkSet = true
+			it.Invert = true
 			it.Table = t.options.IPRoute2TableIndex
 			it.Family = unix.AF_INET
 			rules = append(rules, it)
@@ -780,6 +786,9 @@ func (t *NativeTun) rules() []*netlink.Rule {
 		if p6 {
 			it = netlink.NewRule()
 			it.Priority = t.options.IPRoute2AutoRedirectFallbackRuleIndex
+			it.Mark = t.options.AutoRedirectOutputMark
+			it.MarkSet = true
+			it.Invert = true
 			it.Table = t.options.IPRoute2TableIndex
 			it.Family = unix.AF_INET6
 			rules = append(rules, it)
@@ -816,6 +825,7 @@ func (t *NativeTun) rules() []*netlink.Rule {
 	}
 	if len(t.options.IncludeInterface) > 0 {
 		matchPriority := priority + 2
+		matchPriority6 := priority6 + 2
 		for _, includeInterface := range t.options.IncludeInterface {
 			if p4 {
 				it = netlink.NewRule()
@@ -829,7 +839,7 @@ func (t *NativeTun) rules() []*netlink.Rule {
 				it = netlink.NewRule()
 				it.Priority = priority6
 				it.IifName = includeInterface
-				it.Goto = matchPriority
+				it.Goto = matchPriority6
 				it.Family = unix.AF_INET6
 				rules = append(rules, it)
 			}
@@ -863,7 +873,7 @@ func (t *NativeTun) rules() []*netlink.Rule {
 			priority6++
 
 			it = netlink.NewRule()
-			it.Priority = matchPriority
+			it.Priority = matchPriority6
 			it.Family = unix.AF_INET6
 			rules = append(rules, it)
 			priority6++
@@ -1032,6 +1042,17 @@ func (t *NativeTun) rules() []*netlink.Rule {
 		// priority++
 	}
 	if p6 {
+		for _, address := range t.options.Inet6Address {
+			it = netlink.NewRule()
+			it.Priority = priority6
+			it.IifName = "lo"
+			it.Src = address.Masked()
+			it.Table = t.options.IPRoute2TableIndex
+			it.Family = unix.AF_INET6
+			rules = append(rules, it)
+		}
+		priority6++
+
 		it = netlink.NewRule()
 		it.Priority = priority6
 		it.IifName = t.options.Name
@@ -1054,17 +1075,6 @@ func (t *NativeTun) rules() []*netlink.Rule {
 		it.Goto = nopPriority
 		it.Family = unix.AF_INET6
 		rules = append(rules, it)
-		priority6++
-
-		for _, address := range t.options.Inet6Address {
-			it = netlink.NewRule()
-			it.Priority = priority6
-			it.IifName = "lo"
-			it.Src = address.Masked()
-			it.Table = t.options.IPRoute2TableIndex
-			it.Family = unix.AF_INET6
-			rules = append(rules, it)
-		}
 		priority6++
 
 		it = netlink.NewRule()
@@ -1137,17 +1147,15 @@ func (t *NativeTun) unsetRules() error {
 	if t.options.FileDescriptor > 0 {
 		return nil
 	}
-	if len(t.ruleIndex6) > 0 {
-		for _, index := range t.ruleIndex6 {
-			ruleToDel := netlink.NewRule()
-			ruleToDel.Family = unix.AF_INET6
-			ruleToDel.Priority = index
-			err := netlink.RuleDel(ruleToDel)
-			if err != nil {
-				return E.Cause(err, "unset rule6 ", index)
-			}
+	if !t.options.AutoRoute && len(t.options.Inet6Address) > 0 && t.options.IPRoute2TableIndex != 0 {
+		ruleToDel := netlink.NewRule()
+		ruleToDel.Family = unix.AF_INET6
+		ruleToDel.OifName = t.options.Name
+		ruleToDel.Table = t.options.IPRoute2TableIndex
+		err := netlink.RuleDel(ruleToDel)
+		if err != nil && !errors.Is(err, unix.ENOENT) {
+			return E.Cause(err, "unset rule6")
 		}
-		t.ruleIndex6 = nil
 	}
 	if t.options.AutoRoute {
 		ruleList, err := netlink.RuleList(netlink.FAMILY_ALL)
@@ -1221,6 +1229,19 @@ func (t *NativeTun) setSearchDomainForSystemdResolved() error {
 		_ = shell.Exec(ctlPath, append([]string{"dns", t.options.Name}, common.Map(dnsAddress, netip.Addr.String)...)...).Run()
 	}()
 	return nil
+}
+
+func (t *NativeTun) FlushDNSCache() {
+	if t.options.FileDescriptor != 0 || t.options.EXP_ExternalConfiguration || t.options.DNSModeOrDefault() == DNSModeDisabled || t.options.NetNs != "" {
+		return
+	}
+	ctlPath, err := exec.LookPath("resolvectl")
+	if err != nil {
+		return
+	}
+	// systemd-resolved flushes the cache of a link only when the link switches its current DNS server
+	// (link_set_dns_server in resolved-link.c), which a network change never causes for the TUN link.
+	go shell.Exec(ctlPath, "flush-caches").Run()
 }
 
 func (t *NativeTun) unsetSearchDomainForSystemdResolved() {

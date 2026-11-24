@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/sagernet/sing-box/common/listener"
 	"github.com/sagernet/sing/common"
 	"github.com/sagernet/sing/common/bufio"
 	M "github.com/sagernet/sing/common/metadata"
@@ -21,6 +22,7 @@ type slowOpenConn struct {
 	dialer      *tfo.Dialer
 	ctx         context.Context
 	cancel      context.CancelFunc
+	netns       string
 	network     string
 	destination M.Socksaddr
 	conn        atomic.Pointer[net.TCPConn]
@@ -31,7 +33,7 @@ type slowOpenConn struct {
 	err         error
 }
 
-func DialSlowContext(dialer *tfo.Dialer, ctx context.Context, network string, destination M.Socksaddr) (net.Conn, error) {
+func DialSlowContext(dialer *tfo.Dialer, ctx context.Context, netns string, network string, destination M.Socksaddr) (net.Conn, error) {
 	if dialer.DisableTFO || N.NetworkName(network) != N.NetworkTCP {
 		switch N.NetworkName(network) {
 		case N.NetworkTCP, N.NetworkUDP:
@@ -40,11 +42,12 @@ func DialSlowContext(dialer *tfo.Dialer, ctx context.Context, network string, de
 			return dialer.Dialer.DialContext(ctx, network, destination.AddrString())
 		}
 	}
-	ctx, cancel := context.WithCancel(ctx)
+	dialCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	return &slowOpenConn{
 		dialer:      dialer,
-		ctx:         ctx,
+		ctx:         dialCtx,
 		cancel:      cancel,
+		netns:       netns,
 		network:     network,
 		destination: destination,
 		create:      make(chan struct{}),
@@ -85,20 +88,21 @@ func (c *slowOpenConn) Write(b []byte) (n int, err error) {
 		return 0, os.ErrClosed
 	default:
 	}
-	conn, err := c.dialer.DialContext(c.ctx, c.network, c.destination.String(), b)
-	select {
-	case <-c.done:
-		if conn != nil {
-			_ = conn.Close()
-		}
-		err = os.ErrClosed
-	default:
-	}
+	conn, err := listener.ListenNetworkNamespace[net.Conn](c.ctx, c.netns, func() (net.Conn, error) {
+		return c.dialer.DialContext(c.ctx, c.network, c.destination.String(), b)
+	})
 	if err != nil {
 		c.err = err
 	} else {
-		c.conn.Store(conn.(*net.TCPConn))
-		n = len(b)
+		select {
+		case <-c.done:
+			conn.Close()
+			err = os.ErrClosed
+			c.err = err
+		default:
+			c.conn.Store(conn.(*net.TCPConn))
+			n = len(b)
+		}
 	}
 	close(c.create)
 	return n, err

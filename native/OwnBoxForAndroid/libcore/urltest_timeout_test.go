@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing-box/protocol/group"
 )
 
@@ -45,7 +47,9 @@ func TestUnifiedDelayConfigControlsAutomaticURLTestGroup(t *testing.T) {
 			// Initialize the automatic group's existing pipeline without its
 			// background PostStart probe racing the controlled first response.
 			auto := outbound.(*group.URLTest)
-			if err := auto.Start(); err != nil {
+			scope := adapter.NewScope(context.Background(), log.NewNOPFactory().Logger())
+			defer scope.Close()
+			if err := auto.Start(adapter.StartStateStart, scope); err != nil {
 				t.Fatal(err)
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)

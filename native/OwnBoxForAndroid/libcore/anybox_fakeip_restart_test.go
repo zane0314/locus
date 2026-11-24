@@ -11,6 +11,7 @@ import (
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/dns/transport/fakeip"
 	"github.com/sagernet/sing-box/experimental/cachefile"
+	"github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing/common/logger"
 	"github.com/sagernet/sing/service"
@@ -24,7 +25,8 @@ func TestAnyBoxFakeIPCrashChild(t *testing.T) {
 	}
 	ctx := service.ContextWithDefaultRegistry(context.Background())
 	cache := cachefile.New(ctx, logger.NOP(), option.CacheFileOptions{Path: path, StoreFakeIP: true})
-	if err := cache.Start(adapter.StartStateInitialize); err != nil {
+	scope := adapter.NewScope(ctx, log.NewNOPFactory().Logger())
+	if err := cache.Start(adapter.StartStateInitialize, scope); err != nil {
 		t.Fatal(err)
 	}
 	service.MustRegister[adapter.CacheFile](ctx, cache)

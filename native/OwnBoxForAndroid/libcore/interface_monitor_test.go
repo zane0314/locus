@@ -5,6 +5,7 @@ import (
 	"errors"
 	"github.com/sagernet/sing-box/adapter"
 	C "github.com/sagernet/sing-box/constant"
+	"github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing-box/route"
 	"github.com/sagernet/sing-box/route/rule"
@@ -168,10 +169,11 @@ func TestInterfaceMonitorNetworkConditions(t *testing.T) {
 	if err = w.Initialize(nm); err != nil {
 		t.Fatal(err)
 	}
-	if err = nm.Start(adapter.StartStateInitialize); err != nil {
+	scope := adapter.NewScope(ctx, log.NewNOPFactory().Logger())
+	defer scope.Close()
+	if err = nm.Start(adapter.StartStateInitialize, scope); err != nil {
 		t.Fatal(err)
 	}
-	defer nm.Close()
 	wifi := rule.NewNetworkTypeItem(nm, []C.InterfaceType{C.InterfaceTypeWIFI})
 	cell := rule.NewNetworkTypeItem(nm, []C.InterfaceType{C.InterfaceTypeCellular})
 	expensive := rule.NewNetworkIsExpensiveItem(nm)

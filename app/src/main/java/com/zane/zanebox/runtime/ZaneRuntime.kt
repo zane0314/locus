@@ -48,6 +48,18 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicReference
 
 class ZaneRuntime(private val owner:Service,private val vpn:VpnService?):ContextWrapper(owner) {
+    companion object {
+        internal const val LEGACY_NOTIFICATION_CHANNEL_ID="proxy"
+        internal const val NOTIFICATION_CHANNEL_ID="proxy_v2"
+        internal fun ensureNotificationChannel(manager:NotificationManager) {
+            if(Build.VERSION.SDK_INT<26)return
+            manager.deleteNotificationChannel(LEGACY_NOTIFICATION_CHANNEL_ID)
+            val channel=NotificationChannel(NOTIFICATION_CHANNEL_ID,"Locus 代理",NotificationManager.IMPORTANCE_LOW).apply {
+                setShowBadge(false)
+            }
+            manager.createNotificationChannel(channel)
+        }
+    }
     private val resources=RuntimeResources()
     private val scope=resources.scope
     private val access=Mutex()
@@ -1111,10 +1123,15 @@ class ZaneRuntime(private val owner:Service,private val vpn:VpnService?):Context
             } finally {subscriptionBusy=false;withContext(NonCancellable) {access.withLock {syncIdle()}};armSubscriptionAlarm()}
         }
     }
+    private fun ensureNotificationChannel(manager:NotificationManager) {
+        if(channelReady || Build.VERSION.SDK_INT<26)return
+        ZaneRuntime.ensureNotificationChannel(manager)
+        channelReady=true
+    }
     private fun foregroundEntry(text:String) = synchronized(notificationLock) {
         if(destroyed)return
         val manager=getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        if(!channelReady) {manager.createNotificationChannel(NotificationChannel("proxy","Locus 代理",NotificationManager.IMPORTANCE_LOW));channelReady=true}
+        ensureNotificationChannel(manager)
         val title=notificationTitle.ifBlank {"Locus"}
         owner.startForeground(1,buildNotification(title,text,publishedIcon));inForeground=true
         notificationTitle=title;notificationBody=text;notificationText="$title|$text|$publishedIcon"
@@ -1130,7 +1147,7 @@ class ZaneRuntime(private val owner:Service,private val vpn:VpnService?):Context
             val key="$title|$text|$icon"
             if((rate && !inForeground) || (inForeground && key==notificationText)) return
             val manager=getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-            if(!channelReady && Build.VERSION.SDK_INT>=26) { manager.createNotificationChannel(NotificationChannel("proxy","Locus 代理",NotificationManager.IMPORTANCE_LOW));channelReady=true }
+            ensureNotificationChannel(manager)
             val built=buildNotification(title,text,icon)
             if(rate)manager.notify(1,built) else { owner.startForeground(1,built);inForeground=true }
             notificationText=key;notificationTitle=title;notificationBody=text
@@ -1149,7 +1166,7 @@ class ZaneRuntime(private val owner:Service,private val vpn:VpnService?):Context
     private fun buildNotification(title:String,text:String,icon:Int):android.app.Notification {
         val open=PendingIntent.getActivity(this,0,Intent(this,MainActivity::class.java),PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
         val stop=PendingIntent.getService(this,1,Intent(this,owner.javaClass).setAction("stop"),PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
-        return NotificationCompat.Builder(this,"proxy").setSmallIcon(icon).setContentTitle(title).setContentText(text).setContentIntent(open).setOngoing(true).setOnlyAlertOnce(true).addAction(0,"断开",stop).build()
+        return NotificationCompat.Builder(this,NOTIFICATION_CHANNEL_ID).setSmallIcon(icon).setContentTitle(title).setContentText(text).setContentIntent(open).setOngoing(true).setOnlyAlertOnce(true).setBadgeIconType(NotificationCompat.BADGE_ICON_NONE).addAction(0,"断开",stop).build()
     }
     private fun refreshNotificationIcon() {
         val epoch=notificationEpoch.get()

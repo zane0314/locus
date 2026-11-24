@@ -2,6 +2,7 @@ package v2raygrpclite
 
 import (
 	std_bufio "bufio"
+	"context"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -28,7 +29,9 @@ type GunConn struct {
 	flusher       http.Flusher
 	create        chan struct{}
 	err           error
-	readRemaining int
+	cancel        context.CancelFunc
+	readRemaining uint64
+	onClose       func()
 }
 
 func newGunConn(reader io.Reader, writer io.Writer, flusher http.Flusher) *GunConn {
@@ -40,10 +43,11 @@ func newGunConn(reader io.Reader, writer io.Writer, flusher http.Flusher) *GunCo
 	}
 }
 
-func newLateGunConn(writer io.Writer) *GunConn {
+func newLateGunConn(writer io.Writer, cancel context.CancelFunc) *GunConn {
 	return &GunConn{
 		create: make(chan struct{}),
 		writer: writer,
+		cancel: cancel,
 	}
 }
 
@@ -62,7 +66,7 @@ func (c *GunConn) Read(b []byte) (n int, err error) {
 }
 
 func (c *GunConn) read(b []byte) (n int, err error) {
-	if c.reader == nil {
+	if c.create != nil {
 		<-c.create
 		if c.err != nil {
 			return 0, c.err
@@ -70,11 +74,11 @@ func (c *GunConn) read(b []byte) (n int, err error) {
 	}
 
 	if c.readRemaining > 0 {
-		if len(b) > c.readRemaining {
+		if uint64(len(b)) > c.readRemaining {
 			b = b[:c.readRemaining]
 		}
 		n, err = c.reader.Read(b)
-		c.readRemaining -= n
+		c.readRemaining -= uint64(n)
 		return
 	}
 
@@ -91,14 +95,13 @@ func (c *GunConn) read(b []byte) (n int, err error) {
 	if dataLen > 16<<20 {
 		return 0, fmt.Errorf("gRPC frame exceeds 16 MiB")
 	}
-	readLen := int(dataLen)
-	c.readRemaining = readLen
-	if len(b) > readLen {
-		b = b[:readLen]
+	c.readRemaining = dataLen
+	if uint64(len(b)) > dataLen {
+		b = b[:dataLen]
 	}
 
 	n, err = c.reader.Read(b)
-	c.readRemaining -= n
+	c.readRemaining -= uint64(n)
 	return
 }
 
@@ -145,7 +148,24 @@ func (c *GunConn) FrontHeadroom() int {
 }
 
 func (c *GunConn) Close() error {
-	return common.Close(c.rawReader, c.writer)
+	var reader io.Reader
+	if c.create != nil {
+		select {
+		case <-c.create:
+			reader = c.rawReader
+		default:
+		}
+	} else {
+		reader = c.rawReader
+	}
+	err := common.Close(reader, c.writer)
+	if c.cancel != nil {
+		c.cancel()
+	}
+	if c.onClose != nil {
+		c.onClose()
+	}
+	return err
 }
 
 func (c *GunConn) LocalAddr() net.Addr {

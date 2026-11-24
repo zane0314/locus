@@ -73,8 +73,9 @@ func (q *SubscriptionDNSQuery) Lookup(serverJSON, domain, strategy string) (stri
 	if err != nil {
 		return "", err
 	}
-	defer transport.Close()
-	if err = transport.Start(adapter.StartStateStart); err != nil {
+	scope := adapter.NewScope(ctx, log.NewNOPFactory().Logger())
+	defer scope.Close()
+	if err = transport.Start(adapter.StartStateStart, scope); err != nil {
 		return "", err
 	}
 	client := dns.NewClient(dns.ClientOptions{Context: ctx, DisableCache: true, Logger: log.NewNOPFactory().Logger()})
