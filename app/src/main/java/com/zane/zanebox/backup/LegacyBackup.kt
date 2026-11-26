@@ -75,7 +75,7 @@ internal object LegacyBackup {
         settings["logLevel"]?.toIntOrNull()?.let { level -> settings["logLevel"]=when(level) { 0->"panic";1->"warn";2->"info";3->"debug";4->"trace";else->error("未知旧日志等级") } }
         settings["tunImplementation"]?.toIntOrNull()?.let { stack -> settings["tunStack"]=when(stack) { 0->"gvisor";1->"system";2->"mixed";else->error("未知旧TUN实现") } }
         settings["trafficSniffing"]?.toIntOrNull()?.let { settings["sniff"]=(it>0).toString() }
-        settings["ipv6Mode"]?.toIntOrNull()?.let { mode -> settings["ipv6"]=(mode!=0).toString();settings["dnsStrategy"]=when(mode) {0->"ipv4_only";1->"prefer_ipv4";2->"prefer_ipv6";3->"ipv6_only";else->error("未知旧IPv6模式") } }
+        settings["ipv6Mode"]?.toIntOrNull()?.let { mode -> val strategy=when(mode) {0->"ipv4_only";1->"prefer_ipv4";2->"prefer_ipv6";3->"ipv6_only";else->error("未知旧IPv6模式") };settings["ipv6"]=(mode!=0).toString();settings["dnsStrategy"]=strategy;settings["ipv6Mode"]=strategy }
         settings["globalMode"]?.toBooleanStrictOrNull()?.let { settings["routeMode"]=if(it) "global" else "rule" }
         settings["bypass"]?.toBooleanStrictOrNull()?.let { settings["perAppMode"]=if(it) "exclude" else "include" }
         if(settings.containsKey("webdavServer") && settings.containsKey("webdavPath")) settings["webdavUrl"]=settings.getValue("webdavServer").trimEnd('/')+"/"+settings.getValue("webdavPath").trim('/')+"/"

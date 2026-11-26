@@ -770,7 +770,20 @@ func urlTest(parent context.Context, instance *BoxInstance, link string, timeout
 	if !configured {
 		unified = true
 	}
-	return urltest.MeasureDelay(ctx, client, req1, unified)
+	measurement, err := urltest.MeasureDelayDetail(ctx, client, req1, unified)
+	boxPlatformLogWriter.WriteMessage(
+		sblog.LevelDebug,
+		fmt.Sprintf(
+			"box.urlTest link=%s unified=%t first=%dms second=%dms reused=%t firstClosed=%t latency=%dms err=%v",
+			link, measurement.Unified, measurement.FirstMs, measurement.SecondMs, measurement.Reused, measurement.FirstClosed, measurement.LatencyMs, err,
+		),
+	)
+	instance.urlTestTrace(
+		"measure",
+		"link=%s unified=%t first=%dms second=%dms reused=%t firstClosed=%t latency=%dms err=%v",
+		link, measurement.Unified, measurement.FirstMs, measurement.SecondMs, measurement.Reused, measurement.FirstClosed, measurement.LatencyMs, err,
+	)
+	return measurement.LatencyMs, err
 }
 
 // urlTestDirect keeps HEAD/GET fallback inside the same absolute deadline.

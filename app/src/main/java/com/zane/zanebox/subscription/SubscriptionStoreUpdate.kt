@@ -18,7 +18,7 @@ suspend fun SubscriptionUpdater.update(store:ZaneStore,group:Group,context:Conte
     val baseline=started.groups.first { it.id==group.id }
     try {
         val fetched=SubscriptionClient.fetch(baseline.subscriptionUrl,options.customUserAgent,started.settings)
-        val parsed=prepare(SubscriptionParser.parse(fetched.body),options,started.bool("ipv6",false),started.setting("dnsStrategyServer",started.setting("domainStrategy"))) { host -> com.zane.zanebox.core.SubscriptionDns.lookup(context,host,options.serverDnsResolver,started) }
+        val parsed=prepare(SubscriptionParser.parse(fetched.body),options,started.ipv6Enabled(),started.setting("dnsStrategyServer",started.setting("domainStrategy"))) { host -> com.zane.zanebox.core.SubscriptionDns.lookup(context,host,options.serverDnsResolver,started) }
         store.update { apply(it,baseline,parsed,fetched.userInfo,System.currentTimeMillis()) { store.nextId() } }.groups.first { it.id==group.id }
     } catch(e:CancellationException) {
         store.update { record(it,group.id,"cancelled",System.currentTimeMillis(),nextAttempt=if(automatic)System.currentTimeMillis()+5*60000L else 0,request=request) };throw e

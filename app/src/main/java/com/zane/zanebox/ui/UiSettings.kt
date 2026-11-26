@@ -205,12 +205,13 @@ import org.json.JSONObject
     var confirmation by remember{mutableStateOf<Pair<String,()->Unit>?>(null)}
     val context=LocalContext.current
     val sections=preferenceSections(data)
+    fun resolvedIpv6Mode():String = data.resolvedIpv6Mode()
     UiPageList("设置",onDismiss) {
         sections.forEach{(title,prefs)->
             item{UiSection(title)}
             item{UiCard {
                 prefs.forEachIndexed{index,p->
-                    val value=when(p.key){"ipv6Mode"->data.setting("dnsStrategy",if(data.bool("ipv6"))"prefer_ipv4" else "ipv4_only");"uiSkin"->resolvedUiSkin(data.setting(p.key,p.default));"testTimeout"->SettingDefaults.testTimeout(data.setting(p.key,p.default)).toString();else->data.setting(p.key,p.default)}
+                    val value=when(p.key){"ipv6Mode"->resolvedIpv6Mode();"uiSkin"->resolvedUiSkin(data.setting(p.key,p.default));"testTimeout"->SettingDefaults.testTimeout(data.setting(p.key,p.default)).toString();else->data.setting(p.key,p.default)}
                     val visual=preferenceAppearance[p.key]
                     val summary=if(p.key=="perAppEnabled")uiText("%s · %s 个应用",uiText(if(!data.bool("perAppEnabled"))"关闭" else if(data.setting("perAppMode","exclude")=="include")"代理" else "绕过"),data.setting("perAppPackages").lines().count{it.isNotBlank()}) else if(p.availability.isNotBlank())uiText(p.availability) else if(p.boolean)uiText(visual?.summary.orEmpty()) else p.choices.firstOrNull{it.first==value}?.second?.let{uiText(it)} ?:value.ifBlank{uiText("未设置")}
                     fun setToggle(enabled:Boolean) {
@@ -232,7 +233,7 @@ import org.json.JSONObject
         item{UiSection("数据管理")}
         item{UiCard{UiRow("重置设置","保留节点、分组和路由规则",onClick={confirmation="将应用设置恢复默认值？" to {vm.resetSettings()}},modifier=Modifier.testTag("reset_settings"));UiRow("清除缓存",onClick={confirmation="清除应用缓存？" to {vm.clearCache()}},modifier=Modifier.testTag("clear_cache"));UiRow("恢复出厂设置","清除节点、分组、规则和设置",onClick={confirmation="清除全部应用配置？此操作会断开代理。" to {vm.factoryReset()}},modifier=Modifier.testTag("factory_reset"))}}
     }
-    selecting?.let{p->ChoiceDialog(p.title,if(p.key=="uiSkin")resolvedUiSkin(data.setting(p.key,p.default)) else data.setting(p.key,p.default),p.choices,{selecting=null}){value->
+    selecting?.let{p->ChoiceDialog(p.title,when(p.key){"ipv6Mode"->resolvedIpv6Mode();"uiSkin"->resolvedUiSkin(data.setting(p.key,p.default));else->data.setting(p.key,p.default)},p.choices,{selecting=null}){value->
         if(p.key=="serviceMode" && vm.service.snapshot.value.state in 1..3)vm.message.value="切换服务模式前请先断开连接"
         else runCatching {vm.setting(p.key,value)}.onFailure {vm.message.value=it.message ?: "设置失败"}
     }}

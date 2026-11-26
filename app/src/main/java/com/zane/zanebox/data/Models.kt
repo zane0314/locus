@@ -12,6 +12,13 @@ data class AppData(val nodes:List<Node> = emptyList(), val groups:List<Group> = 
     val selectedGroupId:Long get() = setting("selectedGroupId","0").toLongOrNull() ?: 0L
     fun setting(key:String, default:String=SettingDefaults.value(key)):String = settings[key] ?: default
     fun bool(key:String, default:Boolean=SettingDefaults.value(key,"false").toBoolean()):Boolean = settings[key]?.toBooleanStrictOrNull() ?: default
+    fun resolvedIpv6Mode():String {
+        val valid=setOf("ipv4_only","prefer_ipv4","prefer_ipv6","ipv6_only")
+        return settings["dnsStrategy"]?.takeIf { it in valid }
+            ?: settings["ipv6Mode"]?.takeIf { it in valid }
+            ?: if(bool("ipv6",false))"prefer_ipv4" else "ipv4_only"
+    }
+    fun ipv6Enabled():Boolean = resolvedIpv6Mode()!="ipv4_only"
     fun toJson():String = JSONObject().apply {
         put("format",1)
         put("nodes",JSONArray().apply { nodes.forEach { n -> put(JSONObject().apply { put("id",n.id);put("groupId",n.groupId);put("name",n.name);put("outbound",JSONObject(n.outbound));put("shareLink",n.shareLink);put("ping",n.ping);put("tx",n.tx);put("rx",n.rx);put("order",n.order);put("status",n.status);put("metadata",JSONObject(n.metadata)) }) } })

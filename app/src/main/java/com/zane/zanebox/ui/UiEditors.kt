@@ -100,6 +100,19 @@ internal fun updateNodeField(text:String,path:String,value:String,kind:String):S
         return root.toString()
     }
     if(root.optString("type")=="hysteria2" && path=="server_port" && value.isNotBlank())root.remove("server_ports")
+    if(root.optString("type")=="hysteria2" && path=="obfs.type") {
+        if(value.isBlank()) root.remove("obfs")
+        else {
+            val obfs=root.optJSONObject("obfs") ?: JSONObject().also { root.put("obfs",it) }
+            obfs.put("type",value)
+            if(value!="gecko") { obfs.remove("min_packet_size"); obfs.remove("max_packet_size") }
+        }
+        return root.toString()
+    }
+    if(root.optString("type")=="hysteria2" && path in listOf("obfs.min_packet_size","obfs.max_packet_size") && value.isNotBlank()) {
+        val n=value.toIntOrNull()
+        require(n!=null && n in 1..2048) { "Gecko 包长须为 1–2048 整数" }
+    }
     if(path=="transport.type") {
         if(value.isBlank())root.remove("transport")
         else if(root.optJSONObject("transport")?.optString("type")!=value)root.put("transport",JSONObject().put("type",value))
@@ -167,7 +180,14 @@ internal fun updateRuleField(text:String,key:String,value:String):String=JSONObj
         if(type in listOf("vmess","vless"))add(field("数据包编码","packet_encoding",choices=listOf("","xudp","packetaddr")))
         if(type=="socks")add(field("SOCKS 版本","version",choices=listOf("4","4a","5")))
         if(type in listOf("hysteria","hysteria2")) {add(field("上传带宽（Mbps）","up_mbps","number"));add(field("下载带宽（Mbps）","down_mbps","number"));add(field("服务器端口范围","server_ports","list"))}
-        if(type=="hysteria2"){add(field("混淆类型","obfs.type",choices=listOf("","salamander")));add(field("混淆密码","obfs.password","password"))}
+        if(type=="hysteria2"){
+            add(field("混淆类型","obfs.type",choices=listOf("","salamander","gecko")))
+            add(field("混淆密码","obfs.password","password"))
+            if(nodeField(outbound,"obfs.type")=="gecko") {
+                add(field("最小包长","obfs.min_packet_size","number"))
+                add(field("最大包长","obfs.max_packet_size","number"))
+            }
+        }
         if(type=="hysteria"){add(field("认证字符串","auth_str"));add(field("混淆","obfs"))}
         if(type=="tuic"){add(field("拥塞控制","congestion_control",choices=listOf("cubic","new_reno","bbr")));add(field("UDP 中继模式","udp_relay_mode",choices=listOf("native","quic")));add(field("零 RTT 握手","zero_rtt_handshake","bool"));add(field("心跳间隔","heartbeat"))}
         if(type=="ssh"){add(field("私钥","private_key","list"));add(field("私钥口令","private_key_passphrase","password"));add(field("主机公钥","host_key","list"))}
@@ -214,7 +234,25 @@ internal fun updateRuleField(text:String,key:String,value:String):String=JSONObj
         runCatching{val o=JSONObject(outbound);require(name.isNotBlank()){ "请输入节点名称" };when(type) {
             "chain"->require((o.optJSONArray("node_ids")?.length() ?:0)>0){"请选择链式节点"}
             "custom"->com.zane.zanebox.config.ConfigBuilder.validate(o.getJSONObject("config").toString())
-            else->{require(o.optString("server").isNotBlank()){ "请输入服务器地址" };if(type=="hysteria2" && (o.optJSONArray("server_ports")?.length() ?:0)>0) {
+            else->{require(o.optString("server").isNotBlank()){ "请输入服务器地址" };if(type=="hysteria2") {
+                val obfs=o.optJSONObject("obfs")
+                if(obfs!=null) {
+                    val obfsType=obfs.optString("type").trim()
+                    if(obfsType.isBlank()) o.remove("obfs")
+                    else {
+                        require(obfs.optString("password").isNotEmpty()) { "混淆缺少密码" }
+                        if(obfsType=="gecko") {
+                            val minSize=if(obfs.has("min_packet_size")) obfs.optInt("min_packet_size",-1) else null
+                            val maxSize=if(obfs.has("max_packet_size")) obfs.optInt("max_packet_size",-1) else null
+                            if(minSize!=null) require(minSize in 1..2048) { "Gecko 最小包长须为 1–2048 整数" }
+                            if(maxSize!=null) require(maxSize in 1..2048) { "Gecko 最大包长须为 1–2048 整数" }
+                            require((minSize ?: 512)<=(maxSize ?: 1200)) { "Gecko 有效包长范围无效（默认 512–1200，上限 2048）" }
+                        } else {
+                            obfs.remove("min_packet_size"); obfs.remove("max_packet_size")
+                        }
+                    }
+                }
+            };if(type=="hysteria2" && (o.optJSONArray("server_ports")?.length() ?:0)>0) {
                 val ports=o.getJSONArray("server_ports");com.zane.zanebox.subscription.SubscriptionParser.applyHysteriaPorts(o,(0 until ports.length()).joinToString(","){ports.getString(it)})
             } else require(o.optInt("server_port") in 1..65535){"端口须为 1–65535"}}
         }

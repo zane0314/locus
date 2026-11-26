@@ -713,7 +713,33 @@ fn translate_mihomo_outbound(
                 out.insert("down".into(), Value::String(format!("{down} Mbps")));
             }
             if let Some(obfs) = obj.get("obfs").and_then(Value::as_object) {
-                check_allowed_keys(obfs, &["type", "password"], "Hysteria2 obfs")?;
+                let obfs_type = obfs.get("type").and_then(Value::as_str).unwrap_or("");
+                if obfs_type == "gecko" {
+                    check_allowed_keys(
+                        obfs,
+                        &["type", "password", "min_packet_size", "max_packet_size"],
+                        "Hysteria2 obfs",
+                    )?;
+                    let min_v = obfs.get("min_packet_size").and_then(Value::as_i64);
+                    let max_v = obfs.get("max_packet_size").and_then(Value::as_i64);
+                    if let Some(v) = min_v {
+                        if !(1..=2048).contains(&v) {
+                            return Err("Gecko 最小包长须为 1–2048".to_string());
+                        }
+                    }
+                    if let Some(v) = max_v {
+                        if !(1..=2048).contains(&v) {
+                            return Err("Gecko 最大包长须为 1–2048".to_string());
+                        }
+                    }
+                    if min_v.unwrap_or(512) > max_v.unwrap_or(1200) {
+                        return Err("Gecko 有效包长范围无效".to_string());
+                    }
+                    copy_field(obfs, &mut out, "min_packet_size", "obfs-min-packet-size");
+                    copy_field(obfs, &mut out, "max_packet_size", "obfs-max-packet-size");
+                } else {
+                    check_allowed_keys(obfs, &["type", "password"], "Hysteria2 obfs")?;
+                }
                 copy_field(obfs, &mut out, "type", "obfs");
                 copy_field(obfs, &mut out, "password", "obfs-password");
             }

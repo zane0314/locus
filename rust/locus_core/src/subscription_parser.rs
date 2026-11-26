@@ -642,15 +642,36 @@ fn parse_link(raw: &str) -> Result<ParsedNode, String> {
         o.insert("tls".into(), Value::Object(tls));
     }
 
-    if kind == "hysteria2" && q.get("obfs").map(String::as_str) == Some("salamander") {
-        let pwd = q
-            .get("obfs-password")
-            .ok_or_else(|| "混淆缺少密码".to_string())?
-            .clone();
-        let mut obfs = Map::new();
-        obfs.insert("type".into(), "salamander".into());
-        obfs.insert("password".into(), pwd.into());
-        o.insert("obfs".into(), Value::Object(obfs));
+    if kind == "hysteria2" {
+        if let Some(obfs_type) = q
+            .get("obfs")
+            .map(|s| s.trim().to_ascii_lowercase())
+            .filter(|s| !s.is_empty() && s != "none")
+        {
+            if !matches!(obfs_type.as_str(), "salamander" | "gecko") {
+                return Err(format!("不支持的 Hysteria2 混淆类型：{obfs_type}"));
+            }
+            let pwd = q
+                .get("obfs-password")
+                .filter(|s| !s.is_empty())
+                .ok_or_else(|| "混淆缺少密码".to_string())?
+                .clone();
+            let mut obfs = Map::new();
+            obfs.insert("type".into(), obfs_type.clone().into());
+            obfs.insert("password".into(), pwd.into());
+            if obfs_type == "gecko" {
+                let min_raw = q
+                    .get("obfs-min-packet-size")
+                    .or_else(|| q.get("min_packet_size"))
+                    .map(String::as_str);
+                let max_raw = q
+                    .get("obfs-max-packet-size")
+                    .or_else(|| q.get("max_packet_size"))
+                    .map(String::as_str);
+                apply_hysteria2_gecko_packet_sizes(&mut obfs, min_raw, max_raw)?;
+            }
+            o.insert("obfs".into(), Value::Object(obfs));
+        }
     }
 
     if matches!(kind, "hysteria" | "hysteria2") {
@@ -1561,10 +1582,40 @@ fn clash_map(m: &Map<String, Value>) -> Result<ParsedNode, String> {
     }
 
     if kind == "hysteria2" {
-        if let Some(obfs) = m.get("obfs").filter(|v| !v.is_null()) {
+        if let Some(obfs_type) = m
+            .get("obfs")
+            .filter(|v| !v.is_null())
+            .map(value_as_string)
+            .map(|v| v.trim().to_ascii_lowercase())
+            .filter(|v| !v.is_empty() && v != "none")
+        {
+            if !matches!(obfs_type.as_str(), "salamander" | "gecko") {
+                return Err(format!("不支持的 Hysteria2 混淆类型：{obfs_type}"));
+            }
+            let pwd = s("obfs-password", "");
+            if pwd.is_empty() {
+                return Err("混淆缺少密码".to_string());
+            }
             let mut obfs_obj = Map::new();
-            obfs_obj.insert("type".into(), obfs.clone());
-            obfs_obj.insert("password".into(), s("obfs-password", "").into());
+            obfs_obj.insert("type".into(), obfs_type.clone().into());
+            obfs_obj.insert("password".into(), pwd.into());
+            if obfs_type == "gecko" {
+                let min_raw = m
+                    .get("obfs-min-packet-size")
+                    .or_else(|| m.get("min_packet_size"))
+                    .filter(|v| !v.is_null())
+                    .map(value_as_string);
+                let max_raw = m
+                    .get("obfs-max-packet-size")
+                    .or_else(|| m.get("max_packet_size"))
+                    .filter(|v| !v.is_null())
+                    .map(value_as_string);
+                apply_hysteria2_gecko_packet_sizes(
+                    &mut obfs_obj,
+                    min_raw.as_deref(),
+                    max_raw.as_deref(),
+                )?;
+            }
             o.insert("obfs".into(), Value::Object(obfs_obj));
         }
     }
@@ -1832,6 +1883,43 @@ fn yaml_to_json(v: &serde_yaml::Value) -> Result<Value, String> {
     }
 }
 
+fn apply_hysteria2_gecko_packet_sizes(
+    obfs: &mut Map<String, Value>,
+    min_raw: Option<&str>,
+    max_raw: Option<&str>,
+) -> Result<(), String> {
+    const GECKO_DEFAULT_MIN: i32 = 512;
+    const GECKO_DEFAULT_MAX: i32 = 1200;
+    const GECKO_MAX_ON_WIRE: i32 = 2048;
+
+    let parse_size = |raw: Option<&str>, label: &str| -> Result<Option<i32>, String> {
+        let Some(text) = raw.map(str::trim).filter(|s| !s.is_empty()) else {
+            return Ok(None);
+        };
+        let n = text
+            .parse::<i32>()
+            .map_err(|_| format!("Gecko {label}须为 1–{GECKO_MAX_ON_WIRE} 整数"))?;
+        if !(1..=GECKO_MAX_ON_WIRE).contains(&n) {
+            return Err(format!("Gecko {label}须为 1–{GECKO_MAX_ON_WIRE} 整数"));
+        }
+        Ok(Some(n))
+    };
+    let min_size = parse_size(min_raw, "最小包长")?;
+    let max_size = parse_size(max_raw, "最大包长")?;
+    let effective_min = min_size.unwrap_or(GECKO_DEFAULT_MIN);
+    let effective_max = max_size.unwrap_or(GECKO_DEFAULT_MAX);
+    if effective_min > effective_max {
+        return Err("Gecko 有效包长范围无效（默认 512–1200，上限 2048）".to_string());
+    }
+    if let Some(min) = min_size {
+        obfs.insert("min_packet_size".into(), min.into());
+    }
+    if let Some(max) = max_size {
+        obfs.insert("max_packet_size".into(), max.into());
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1847,5 +1935,52 @@ mod tests {
         let h: Value = serde_json::from_str(&report.nodes[1].outbound).unwrap();
         assert_eq!(h["hop_interval"], "30s");
         assert_eq!(h["server_ports"][0], "20000:20010");
+    }
+
+    #[test]
+    fn parses_hysteria2_gecko_bare_uri_and_clash_yaml() {
+        let bare = "\
+hysteria2://pw1@198.51.100.1:443/?sni=hy2.example.com&alpn=h3&insecure=0&obfs=gecko&obfs-password=gpass1#HY2-Gecko-V4\n\
+hysteria2://pw2@[2001:db8::1]:443/?sni=hy2.example.com&alpn=h3&insecure=0&obfs=gecko&obfs-password=gpass2&obfs-min-packet-size=600&obfs-max-packet-size=1100#HY2-Gecko-V6\n";
+        let report = parse_report(bare).unwrap();
+        assert_eq!(report.nodes.len(), 2);
+        assert_eq!(report.skipped, 0);
+
+        let n0: Value = serde_json::from_str(&report.nodes[0].outbound).unwrap();
+        assert_eq!(n0["obfs"]["type"], "gecko");
+        assert_eq!(n0["obfs"]["password"], "gpass1");
+        assert!(n0["obfs"].get("min_packet_size").is_none());
+        assert!(n0["obfs"].get("max_packet_size").is_none());
+
+        let n1: Value = serde_json::from_str(&report.nodes[1].outbound).unwrap();
+        assert_eq!(n1["server"], "2001:db8::1");
+        assert_eq!(n1["obfs"]["type"], "gecko");
+        assert_eq!(n1["obfs"]["password"], "gpass2");
+        assert_eq!(n1["obfs"]["min_packet_size"], 600);
+        assert_eq!(n1["obfs"]["max_packet_size"], 1100);
+
+        let missing_pwd = "hysteria2://pw@198.51.100.1:443/?sni=hy2.example.com&obfs=gecko#MissingPwd";
+        assert!(parse_report(missing_pwd).is_err());
+
+        let yaml = "\
+proxies:
+  - name: HY2-Gecko-YAML
+    type: hysteria2
+    server: hy2.example.com
+    port: 443
+    password: pw3
+    sni: hy2.example.com
+    obfs: gecko
+    obfs-password: gpass3
+    obfs-min-packet-size: 512
+    obfs-max-packet-size: 1200
+";
+        let yaml_report = parse_report(yaml).unwrap();
+        assert_eq!(yaml_report.nodes.len(), 1);
+        let y0: Value = serde_json::from_str(&yaml_report.nodes[0].outbound).unwrap();
+        assert_eq!(y0["obfs"]["type"], "gecko");
+        assert_eq!(y0["obfs"]["password"], "gpass3");
+        assert_eq!(y0["obfs"]["min_packet_size"], 512);
+        assert_eq!(y0["obfs"]["max_packet_size"], 1200);
     }
 }

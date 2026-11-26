@@ -80,6 +80,7 @@ class ZaneRuntime(private val owner:Service,private val vpn:VpnService?):Context
     private var ruleScheduleSignature=""
     private val ready=CompletableDeferred<Unit>()
     private val visibleClients=ConcurrentHashMap<String,Long>()
+    private val samplerWake=Channel<Unit>(Channel.CONFLATED)
     private var sampler:Job?=null
     private var chainTests:Job?=null
     @Volatile private var chainSelectionState="{}"
@@ -128,6 +129,7 @@ class ZaneRuntime(private val owner:Service,private val vpn:VpnService?):Context
     private val wakeReceiver=object:BroadcastReceiver() {
         override fun onReceive(context:Context,intent:Intent) {
             if(intent.action==Intent.ACTION_SCREEN_ON && current.get().connectionState==RuntimeState.CONNECTED) {
+                samplerWake.trySend(Unit)
                 dispatch("wakeReset","")
                 afterReady {onScreenOnAutoTest()}
             }
@@ -211,7 +213,13 @@ class ZaneRuntime(private val owner:Service,private val vpn:VpnService?):Context
         if(action=="uiVisible") {
             val (token,value)=payload.split('|',limit=2).takeIf{it.size==2} ?: return
             if(!token.matches(Regex("[0-9a-f-]{36}")))return
-            if(value=="true")visibleClients[token]=SystemClock.elapsedRealtime() else visibleClients.remove(token)
+            val now=SystemClock.elapsedRealtime()
+            visibleClients.entries.removeIf { now-it.value>=15000L }
+            if(value=="true") {
+                val wasEmpty=visibleClients.isEmpty()
+                visibleClients[token]=now
+                if(wasEmpty && current.get().connectionState==RuntimeState.CONNECTED)samplerWake.trySend(Unit)
+            } else visibleClients.remove(token)
             return
         }
         if(action in setOf("ip","validate","logs","systemLogs","connections","panel"))afterReady {RuntimeCommand.fromWire(action)?.let {execute(it,payload)}}
@@ -514,15 +522,18 @@ class ZaneRuntime(private val owner:Service,private val vpn:VpnService?):Context
     }
     private fun startSampler(token:Long) {
         sampler?.cancel()
+        while(samplerWake.tryReceive().isSuccess) {}
         sampler=scope.launch {
             var last=SystemClock.elapsedRealtime();var selections=JSONObject()
             var lastControllers=0L;var lastPersist=last;var lastSubscription=0L;var statsError=false
             while(isActive && current.get().generation==token && current.get().connectionState==RuntimeState.CONNECTED) {
                 val interval=SamplingPolicy.interval(power.isInteractive,visibleClients.values.any {SystemClock.elapsedRealtime()-it<15000})
-                delay(interval)
+                withTimeoutOrNull(interval) { samplerWake.receive() }
                 val data=store.snapshot();val now=SystemClock.elapsedRealtime()
+                val interactive=power.isInteractive
+                val observed=visibleClients.values.any {now-it<15000}
                 if(now-lastSubscription>=30000) {lastSubscription=now;checkSubscriptionUpdates()}
-                val pollDue=now-lastControllers>=if(interval==1000L)5000L else 30000L
+                val pollDue=now-lastControllers>=SamplingPolicy.controllerPollInterval(interactive,observed)
                 val polled=pollDue && clashApiActive
                 if(pollDue)lastControllers=now
                 if(polled)readSelections(data).takeIf { it.length()>0 }?.let { selections=it }
@@ -538,9 +549,9 @@ class ZaneRuntime(private val owner:Service,private val vpn:VpnService?):Context
                     touchActiveUrlTestGroups(data,traffic,selections)
                     syncUrlTestRounds(data)
                     publish(current.get().copy(txRate=tx*1000/duration,rxRate=rx*1000/duration,txTotal=sessionTx,rxTotal=sessionRx),data)
-                    notification("↑ ${tx*1000/duration} B/s  ↓ ${rx*1000/duration} B/s",rate=true,data=data)
+                    if(interactive)notification("↑ ${tx*1000/duration} B/s  ↓ ${rx*1000/duration} B/s",rate=true,data=data)
                     connections?.let {try {this@ZaneRuntime.traffic.sampleConnections(it)} catch(e:Exception) {if(!statsError){event("message","连接统计解析失败：${safeError(e)}");statsError=true}}}
-                    val persist=sampledAt-lastPersist>=60000
+                    val persist=sampledAt-lastPersist>=SamplingPolicy.persistInterval(interactive,observed)
                     if(persist) {this@ZaneRuntime.traffic.persistTraffic();lastPersist=sampledAt}
                     android.util.Log.d("LinksRuntime","sample interval=$interval tags=${engine.trackedTags.size} controllers=$polled persisted=$persist")
                 }
@@ -982,7 +993,10 @@ class ZaneRuntime(private val owner:Service,private val vpn:VpnService?):Context
         if(destroyed || data==null || data.setting("autoTestPowerMode")!="normal" || current.get().connectionState!=RuntimeState.CONNECTED || unmanagedGroups.isEmpty()) {
             cancelAutoTestAlarm();return
         }
-        val nextDelay=unmanagedGroups.map {engine.urlTestDueIn(it)}.filter {it>=0L}.minOrNull()
+        val nextDelay=SamplingPolicy.coalescedAutoTestDelay(
+            unmanagedGroups.map {engine.urlTestDueIn(it)},
+            urlTestIntervalMs(data),
+        )
         if(nextDelay==null) {cancelAutoTestAlarm();return}
         val alarms=getSystemService(android.app.AlarmManager::class.java)
         val triggerAt=SystemClock.elapsedRealtime()+maxOf(nextDelay,500L)

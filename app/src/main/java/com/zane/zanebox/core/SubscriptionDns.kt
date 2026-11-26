@@ -36,8 +36,8 @@ object SubscriptionDns {
             override fun autoDetectInterfaceControl(fd:Int) { ParcelFileDescriptor.fromFd(fd).use { network.bindSocket(it.fileDescriptor) } }
         })
         try {
-            val nodeStrategy=if(!data.bool("ipv6",false))"ipv4_only" else data.setting("dnsStrategyServer",data.setting("domainStrategy"))
-            val directStrategy=if(!data.bool("ipv6",false))"ipv4_only" else data.setting("dnsStrategyDirect",data.setting("dnsStrategy","prefer_ipv4"))
+            val nodeStrategy=if(!data.ipv6Enabled())"ipv4_only" else data.setting("dnsStrategyServer",data.setting("domainStrategy"))
+            val directStrategy=if(!data.ipv6Enabled())"ipv4_only" else data.setting("dnsStrategyDirect",data.resolvedIpv6Mode())
             val directResolver=data.setting("dnsDirect","local")
             val server=SubscriptionDnsOptions.server(resolver,"subscription-query")
             val resolverHost=server.getString("server")

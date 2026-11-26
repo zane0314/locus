@@ -113,6 +113,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             return
         }
         if(key=="ipv6Mode") { require(value in listOf("ipv4_only","prefer_ipv4","prefer_ipv6","ipv6_only"));edit { it.copy(settings=it.settings+("ipv6Mode" to value)+("ipv6" to (value!="ipv4_only").toString())+("dnsStrategy" to value)) };return }
+        if(key=="dnsStrategy" && value in listOf("ipv4_only","prefer_ipv4","prefer_ipv6","ipv6_only")) { edit { it.copy(settings=it.settings+("dnsStrategy" to value)+("ipv6Mode" to value)+("ipv6" to (value!="ipv4_only").toString())) };return }
         if(settingsApply(key)==SettingsApply.LIVE)task {
             store.update {data->
                 val group=if(key.startsWith("sort_group_"))key.removePrefix("sort_group_").toLongOrNull() else if(key.startsWith("sort_mode_group_"))key.removePrefix("sort_mode_group_").toLongOrNull() else null

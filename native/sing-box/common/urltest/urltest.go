@@ -91,7 +91,15 @@ func URLTest(ctx context.Context, link string, detour N.Dialer) (uint16, error) 
 			DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
 				return detour.DialContext(ctx, network, M.ParseSocksaddr(address))
 			},
-			TLSClientConfig: &tls.Config{Time: ntp.TimeFuncFromContext(ctx), RootCAs: adapter.RootPoolFromContext(ctx)},
+			TLSClientConfig: &tls.Config{
+				Time:       ntp.TimeFuncFromContext(ctx),
+				RootCAs:    adapter.RootPoolFromContext(ctx),
+				NextProtos: []string{"h2", "http/1.1"},
+			},
+			ForceAttemptHTTP2: true,
+			DisableKeepAlives: false,
+			MaxIdleConns:      5,
+			IdleConnTimeout:   10 * time.Second,
 		}
 		defer transport.CloseIdleConnections()
 		client := &http.Client{Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}

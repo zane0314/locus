@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/common/urltest"
 	"github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing-box/protocol/group"
 )
@@ -147,5 +148,70 @@ func TestBoxCloseCancelsProbeContext(t *testing.T) {
 	}
 	if instance.ctx.Err() != context.Canceled {
 		t.Fatal("close did not cancel instance probe parent")
+	}
+}
+
+func TestHysteria2GeckoObfsConfigValidatesInLibcore(t *testing.T) {
+	cases := []struct {
+		name string
+		obfs string
+	}{
+		{
+			name: "password-only",
+			obfs: `{"type":"gecko","password":"gecko-test-password"}`,
+		},
+		{
+			name: "with-packet-sizes",
+			obfs: `{"type":"gecko","password":"gecko-test-password","min_packet_size":560,"max_packet_size":1180}`,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			config := fmt.Sprintf(`{"log":{"disabled":true},"outbounds":[{"type":"hysteria2","tag":"hy2","server":"198.51.100.1","server_port":443,"password":"pw","obfs":%s,"tls":{"enabled":true,"server_name":"hy2.example.com","alpn":["h3"]}},{"type":"direct","tag":"direct"}],"route":{"final":"hy2"}}`, tc.obfs)
+			instance, err := checkVlessConfig(config)
+			if err != nil {
+				t.Fatalf("libcore rejected hysteria2 gecko config (%s): %v", tc.name, err)
+			}
+			_ = instance.Close()
+		})
+	}
+}
+
+func TestBoxUrlTestUnifiedModeRejectsSecondRequestTimeoutInsteadOfColdFallback(t *testing.T) {
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if requests.Add(1) == 1 {
+			time.Sleep(120 * time.Millisecond)
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+
+	config := `{"log":{"disabled":true},"experimental":{"unified_delay":true},"outbounds":[{"type":"direct","tag":"direct"}],"route":{"final":"direct"}}`
+	boxInst, err := checkVlessConfig(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := boxInst.Start(); err != nil {
+		_ = boxInst.Close()
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(urltest.WithUnifiedDelay(context.Background(), true))
+	defer cancel()
+	bi := &BoxInstance{
+		Box:       boxInst,
+		ctx:       ctx,
+		cancel:    cancel,
+		startBox:  boxInst.Start,
+		closeBox:  boxInst.Close,
+		isURLTest: true,
+	}
+	defer bi.Close()
+
+	latency, err := urlTest(bi.ctx, bi, server.URL, 260)
+	if err == nil || latency != 0 {
+		t.Fatalf("expected timeout error instead of cold fallback, got latency=%dms err=%v", latency, err)
 	}
 }

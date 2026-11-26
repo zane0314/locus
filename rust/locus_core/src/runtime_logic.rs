@@ -19,8 +19,10 @@ pub fn sampling_pause_core(device_idle: bool, subscription_busy: bool, wireguard
 pub fn sampling_interval(interactive: bool, observed: bool) -> i64 {
     if interactive && observed {
         1000
-    } else {
+    } else if interactive || observed {
         10_000
+    } else {
+        60_000
     }
 }
 

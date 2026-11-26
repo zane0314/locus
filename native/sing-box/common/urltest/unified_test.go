@@ -64,34 +64,78 @@ func TestUnifiedDelayActuallyReusesConnectionAndExcludesDial(t *testing.T) {
 	}
 }
 
-func TestUnifiedDelayRedialFallsBackToColdAndKeepsDeadline(t *testing.T) {
-	for _, closeConnection := range []bool{false, true} {
+func TestUnifiedDelayRejectsColdFallbackAndKeepsDeadline(t *testing.T) {
+	t.Run("second_timeout", func(t *testing.T) {
 		var requests atomic.Int32
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if requests.Add(1) == 1 {
-				if closeConnection {
-					w.Header().Set("Connection", "close")
-				}
 				w.WriteHeader(http.StatusNoContent)
 				return
 			}
-			if !closeConnection {
-				<-r.Context().Done()
-				return
-			}
-			w.WriteHeader(http.StatusNoContent)
+			<-r.Context().Done()
 		}))
+		defer server.Close()
 		dialer := new(delayedTestDialer)
 		ctx, cancel := context.WithTimeout(WithUnifiedDelay(context.Background(), true), 300*time.Millisecond)
 		started := time.Now()
 		delay, err := URLTest(ctx, server.URL, dialer)
 		cancel()
-		server.Close()
-		if err != nil || delay < 100 {
-			t.Fatalf("fallback must retain first dial duration, got %dms %v", delay, err)
+		if err == nil || delay != 0 {
+			t.Fatalf("unified mode must fail on 2nd timeout instead of falling back: got %dms err=%v", delay, err)
 		}
 		if elapsed := time.Since(started); elapsed > 400*time.Millisecond {
 			t.Fatalf("deadline extended: %s", elapsed)
 		}
-	}
+	})
+
+	t.Run("dropped_keepalive_redial", func(t *testing.T) {
+		var requests atomic.Int32
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if requests.Add(1) == 1 {
+				// Advertise keep-alive but drop the TCP connection immediately afterwards
+				// to simulate a proxy/NAT breaking idle keep-alive and forcing a cold redial.
+				hj, ok := w.(http.Hijacker)
+				if !ok {
+					t.Fatal("hijacker unsupported")
+				}
+				conn, rw, err := hj.Hijack()
+				if err != nil {
+					t.Fatal(err)
+				}
+				_, _ = rw.WriteString("HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nConnection: keep-alive\r\n\r\n")
+				_ = rw.Flush()
+				_ = conn.Close()
+				return
+			}
+			w.WriteHeader(http.StatusNoContent)
+		}))
+		defer server.Close()
+		dialer := new(delayedTestDialer)
+		ctx, cancel := context.WithTimeout(WithUnifiedDelay(context.Background(), true), 600*time.Millisecond)
+		delay, err := URLTest(ctx, server.URL, dialer)
+		cancel()
+		if err == nil || delay != 0 {
+			t.Fatalf("dropped keep-alive redial must fail with ErrUnifiedConnectionNotReused, got %dms err=%v", delay, err)
+		}
+	})
+
+	t.Run("explicit_connection_close", func(t *testing.T) {
+		var requests atomic.Int32
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			requests.Add(1)
+			w.Header().Set("Connection", "close")
+			w.WriteHeader(http.StatusNoContent)
+		}))
+		defer server.Close()
+		dialer := new(delayedTestDialer)
+		ctx, cancel := context.WithTimeout(WithUnifiedDelay(context.Background(), true), 600*time.Millisecond)
+		delay, err := URLTest(ctx, server.URL, dialer)
+		cancel()
+		if err != nil || delay < 120 {
+			t.Fatalf("explicit Connection: close endpoint must return 1st probe latency without failing: got %dms err=%v", delay, err)
+		}
+		if requests.Load() != 1 || dialer.dials.Load() != 1 {
+			t.Fatalf("explicit Connection: close should skip wasteful 2nd dial: requests=%d dials=%d", requests.Load(), dialer.dials.Load())
+		}
+	})
 }

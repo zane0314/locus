@@ -33,7 +33,7 @@ internal fun preferenceSections(data:AppData)=listOf(
         choice("proxyCore","代理内核",SettingDefaults.value("proxyCore"),"sing-box" to "sing-box","xray" to "Xray（试验）","mihomo" to "mihomo（试验）"),
         choice("tunStack","TUN 实现",SettingDefaults.value("tunStack"),"mixed" to "混合","system" to "系统","gvisor" to "gVisor"),
         Preference("mtu","MTU",SettingDefaults.value("mtu")),
-        Preference("speedInterval","速度通知更新间隔",SettingDefaults.value("speedInterval"),availability="前台 1s，后台或息屏 10s"),
+        Preference("speedInterval","速度通知更新间隔",SettingDefaults.value("speedInterval"),availability="前台 1s，后台或息屏 10s，息屏无界面 60s"),
         boolean("statsEnabled","流量统计"),
         boolean("showDirectSpeed","显示直连速度"),
         boolean("showGroupInNotification","在通知中显示组名"),

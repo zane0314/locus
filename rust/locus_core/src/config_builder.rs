@@ -1751,7 +1751,21 @@ pub fn build_config(
         dns_rules = next_dns;
     }
 
-    let ipv6 = data.bool_setting("ipv6", Some(false));
+    let explicit_ipv6_mode = data
+        .settings
+        .get("ipv6Mode")
+        .map(String::as_str)
+        .filter(|s| matches!(*s, "ipv4_only" | "prefer_ipv4" | "prefer_ipv6" | "ipv6_only"));
+    let explicit_dns_strategy = data
+        .settings
+        .get("dnsStrategy")
+        .map(String::as_str)
+        .filter(|s| matches!(*s, "ipv4_only" | "prefer_ipv4" | "prefer_ipv6" | "ipv6_only"));
+    let ipv6 = match (explicit_dns_strategy, explicit_ipv6_mode) {
+        (Some(s), _) => s != "ipv4_only",
+        (None, Some(m)) => m != "ipv4_only",
+        (None, None) => data.bool_setting("ipv6", Some(false)),
+    };
     if fake_dns {
         let mut fake = Map::new();
         fake.insert("type".into(), Value::String("fakeip".to_string()));
@@ -1813,7 +1827,10 @@ pub fn build_config(
         dns_rules = ordered;
     }
 
-    let dns_strategy = data.setting_or("dnsStrategy", if ipv6 { "prefer_ipv4" } else { "ipv4_only" });
+    let dns_strategy = data.setting_or(
+        "dnsStrategy",
+        explicit_ipv6_mode.unwrap_or(if ipv6 { "prefer_ipv4" } else { "ipv4_only" }),
+    );
     if !matches!(
         dns_strategy,
         "" | "prefer_ipv4" | "prefer_ipv6" | "ipv4_only" | "ipv6_only"

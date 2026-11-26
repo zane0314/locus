@@ -513,4 +513,101 @@ proxies:
         let excluded = latency_sync_sibling_ids(&data, &[10], &HashSet::from([10, 20]));
         assert_eq!(excluded.get("10"), Some(&vec![11, 21]));
     }
+
+    #[test]
+    fn hysteria2_gecko_builds_for_sing_box_and_mihomo_and_ipv6_mode_derives_tun_ipv6() {
+        let link = "hysteria2://pw@hy2.example.com:443/?sni=hy2.example.com&alpn=h3&insecure=0&obfs=gecko&obfs-password=gsec&obfs-min-packet-size=560&obfs-max-packet-size=1180#HY2-Gecko\n";
+        let parsed = parse_report(link).unwrap().nodes.pop().unwrap();
+        let mut data = AppData {
+            groups: vec![Group {
+                id: 1,
+                name: "Default".into(),
+                subscription_url: String::new(),
+                enabled: true,
+                order: 0,
+                updated_at: 0,
+                user_info: String::new(),
+                front_proxy: 0,
+                landing_proxy: 0,
+                options: "{}".into(),
+            }],
+            nodes: vec![Node {
+                id: 10,
+                group_id: 1,
+                name: parsed.name,
+                outbound: parsed.outbound,
+                share_link: parsed.share_link,
+                ping: -1,
+                tx: 0,
+                rx: 0,
+                order: 0,
+                status: 0,
+                metadata: parsed.metadata,
+            }],
+            ..AppData::default()
+        };
+        data.settings.insert("selectedNodeId".into(), "10".into());
+        data.settings.insert("selectedGroupId".into(), "1".into());
+        // Only ipv6Mode set without explicit ipv6 boolean must still enable IPv6 TUN + FakeIP.
+        data.settings.insert("ipv6Mode".into(), "prefer_ipv4".into());
+
+        let sb_cfg = build_config(&data, Purpose::Main, 0, "sec", None).unwrap();
+        let sb_val: Value = serde_json::from_str(&sb_cfg).unwrap();
+        let hy2 = sb_val["outbounds"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|o| o["tag"] == "node-10")
+            .unwrap();
+        assert_eq!(hy2["obfs"]["type"], "gecko");
+        assert_eq!(hy2["obfs"]["password"], "gsec");
+        assert_eq!(hy2["obfs"]["min_packet_size"], 560);
+        assert_eq!(hy2["obfs"]["max_packet_size"], 1180);
+
+        let tun = sb_val["inbounds"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|i| i["tag"] == "tun-in")
+            .unwrap();
+        let addrs = tun["address"].as_array().unwrap();
+        assert_eq!(addrs.len(), 2);
+        assert_eq!(sb_val["dns"]["strategy"], "prefer_ipv4");
+
+        // Setting dnsStrategy alone also keeps IPv6 TUN synchronized.
+        let mut dns_only = data.clone();
+        dns_only.settings.shift_remove("ipv6Mode");
+        dns_only.settings.insert("dnsStrategy".into(), "prefer_ipv6".into());
+        let dns_cfg = build_config(&dns_only, Purpose::Main, 0, "sec", None).unwrap();
+        let dns_val: Value = serde_json::from_str(&dns_cfg).unwrap();
+        let tun2 = dns_val["inbounds"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|i| i["tag"] == "tun-in")
+            .unwrap();
+        assert_eq!(tun2["address"].as_array().unwrap().len(), 2);
+        assert_eq!(dns_val["dns"]["strategy"], "prefer_ipv6");
+
+        // Mihomo extra-core planner forwards gecko + packet size fields cleanly.
+        let mut mihomo_data = data.clone();
+        mihomo_data
+            .settings
+            .insert("proxyCore".into(), CORE_MIHOMO.into());
+        let mihomo_cfg = build_config(&mihomo_data, Purpose::Test, 10, "", None).unwrap();
+        let mut p = 22000u16;
+        let plan = plan_extra_core_with_allocator(&mihomo_cfg, &mut || {
+            let cur = p;
+            p += 1;
+            Ok(cur)
+        })
+        .unwrap()
+        .unwrap();
+        let extra: Value = serde_json::from_str(&plan.extra_core_config).unwrap();
+        let proxy = &extra["coreConfig"]["proxies"][0];
+        assert_eq!(proxy["obfs"], "gecko");
+        assert_eq!(proxy["obfs-password"], "gsec");
+        assert_eq!(proxy["obfs-min-packet-size"], 560);
+        assert_eq!(proxy["obfs-max-packet-size"], 1180);
+    }
 }
